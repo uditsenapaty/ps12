@@ -1,0 +1,255 @@
+"""PS12 Streamlit dashboard — professional UI over the real interpolation / upscaling / eval code.
+
+Run:  streamlit run src/viz/dashboard.py
+
+Tabs
+  ▶ Interpolate         two consecutive frames -> intermediate frame(s); model picker across
+                        pretrained / fine-tuned (rife_ft) / custom (unet); motion overlay; metrics vs GT.
+  🔼 Temporal Upscaling  INSAT-3DS/3DR 30 -> 15 -> 7.5 min (recursive midpoint insertion) as a time-lapse.
+  📊 Validation Report   committed validation_report/ (tables, plots, qualitative panels, GIFs).
+Nothing is mocked — every panel calls the real infer/eval code.
+"""
+from __future__ import annotations
+
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+import numpy as np
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+import streamlit as st  # noqa: E402
+
+# credentials: Streamlit Cloud secrets (st.secrets) or local .env.local -> environment
+try:
+    for _k, _v in dict(st.secrets).items():
+        os.environ.setdefault(_k, str(_v))
+except Exception:
+    pass
+from src.data.env import load_env  # noqa: E402
+
+load_env()
+
+from src.data.normalize import BT_MAX_DEFAULT, BT_MIN_DEFAULT, bt_to_norm  # noqa: E402
+from src.data.readers import read_frame  # noqa: E402
+from src.eval import metrics  # noqa: E402
+from src.infer.interpolate import interpolate_pair_bt  # noqa: E402
+from src.infer.upscale import temporal_upscale_bt, upscale_total_steps  # noqa: E402
+from src.models.factory import discover_models, get_model  # noqa: E402
+from src.viz.animate import bt_to_rgb, flow_overlay_rgb, frames_to_gif  # noqa: E402
+
+VALIDATION_DIR = ROOT / "validation_report"
+SAMPLES_DIR = ROOT / "samples"
+SOURCES = ["goes19", "himawari9", "insat3dr", "insat3ds"]
+
+st.set_page_config(page_title="PS12 · Satellite Frame Interpolation", page_icon="🛰️", layout="wide")
+
+st.markdown(
+    """
+    <style>
+      #MainMenu, footer {visibility: hidden;}
+      .hero {background: linear-gradient(90deg,#0b2c4a 0%,#10243b 60%,#0E1117 100%);
+             padding:18px 24px;border-radius:12px;border:1px solid #1f2c3d;margin-bottom:8px;}
+      .hero h1 {margin:0;font-size:1.55rem;color:#E6EDF3;}
+      .hero p {margin:.25rem 0 0;color:#8aa0b6;font-size:.92rem;}
+      .badge {display:inline-block;padding:2px 9px;border-radius:11px;font-size:.74rem;margin:2px 4px 2px 0;}
+      .ok {background:#13351f;color:#5fd38a;border:1px solid #1d5b34;}
+      .no {background:#3a1c1c;color:#e08585;border:1px solid #5b2424;}
+      .card {background:#161B22;border:1px solid #222b38;border-radius:10px;padding:14px 16px;}
+      .cap {color:#8aa0b6;font-size:.8rem;text-align:center;}
+      .stImage img {border-radius:8px;border:1px solid #222b38;}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+st.markdown(
+    '<div class="hero"><h1>🛰️ Fill in the Frames — Satellite Temporal Super-Resolution</h1>'
+    '<p>AI optical-flow frame interpolation for INSAT-3DS/3DR · GOES-19 · Himawari — thermal IR (~10 µm). '
+    'Enhance temporal resolution 30 → 15 → 7.5 min and validate against real ground truth.</p></div>',
+    unsafe_allow_html=True,
+)
+
+
+@st.cache_data(show_spinner=False)
+def _models():
+    return discover_models()
+
+
+def _load_bt(file_or_path, source: str) -> np.ndarray:
+    return read_frame(file_or_path, source, with_lonlat=False).bt
+
+
+def _model_picker(models, key: str):
+    labels = [m["label"] + ("" if m["available"] else "  ·  needs weights/GPU") for m in models]
+    i = st.selectbox("Model", range(len(models)), format_func=lambda j: labels[j], key=key)
+    return models[i]
+
+
+models = _models()
+sample_files = sorted([p for p in SAMPLES_DIR.rglob("*") if p.suffix.lower() in (".nc", ".h5")])
+
+# ---------------------------------------------------------------- sidebar (status)
+with st.sidebar:
+    st.markdown("### PS12 · Frame Interpolation")
+    st.caption("Optical-flow + deep VFI for geostationary IR")
+    st.divider()
+    st.markdown("**Models runnable here**")
+    badges = "".join(
+        f'<span class="badge {"ok" if m["available"] else "no"}">{m["label"].split(" (")[0]}</span>'
+        for m in models
+    )
+    st.markdown(badges, unsafe_allow_html=True)
+    st.divider()
+    st.markdown("**System status**")
+    st.markdown(f"- Sample frames found: **{len(sample_files)}**")
+    st.markdown(f"- Validation experiments: **{len(list(VALIDATION_DIR.glob('*/'))) if VALIDATION_DIR.exists() else 0}**")
+    st.caption("Heavy training/inference runs on the GPU server (see walkthrough.md & connect.py). "
+               "Classical + RAFT run locally on CPU.")
+
+tab_interp, tab_upscale, tab_valid = st.tabs(["▶  Interpolate", "🔼  Temporal Upscaling", "📊  Validation Report"])
+
+# ---------------------------------------------------------------- Interpolate
+with tab_interp:
+    left, right = st.columns([1, 2], gap="large")
+    with left:
+        st.markdown("#### Configuration")
+        source = st.selectbox("Satellite source", SOURCES, key="src_i")
+        chosen = _model_picker(models, "mdl_i")
+        factor = st.radio("Output cadence", [2, 4], horizontal=True, key="fac_i",
+                          format_func=lambda f: "2× (e.g. 30→15)" if f == 2 else "4× (→7.5)")
+        show_overlay = st.checkbox("Motion-vector overlay", value=True, key="ov_i")
+    with right:
+        st.markdown("#### Inputs — two consecutive frames (+ optional ground-truth middle)")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            up0 = st.file_uploader("Frame t0", type=["nc", "h5"], key="f0")
+            pick0 = st.selectbox("…or sample t0", [""] + [str(p) for p in sample_files], key="p0")
+        with c2:
+            up1 = st.file_uploader("Frame t2", type=["nc", "h5"], key="f1")
+            pick1 = st.selectbox("…or sample t2", [""] + [str(p) for p in sample_files], key="p1")
+        with c3:
+            upgt = st.file_uploader("GT middle t1", type=["nc", "h5"], key="fgt")
+            pickgt = st.selectbox("…or sample t1 (GT)", [""] + [str(p) for p in sample_files], key="pgt")
+    go = st.button("Interpolate", type="primary", key="btn_i", use_container_width=True)
+
+    if go:
+        src0, src2 = up0 or (pick0 or None), up1 or (pick1 or None)
+        if not src0 or not src2:
+            st.error("Provide both t0 and t2 (upload or pick a sample)."); st.stop()
+        with st.status("Running interpolation…", expanded=True) as status:
+            st.write("📥 Loading frame **t0**…"); bt0 = _load_bt(src0, source)
+            st.write("📥 Loading frame **t2**…"); bt2 = _load_bt(src2, source)
+            st.write(f"🧠 Loading model **{chosen['label'].split(' (')[0]}**…")
+            model = get_model(chosen["name"], **chosen["kwargs"])
+            st.write(f"✨ Interpolating {factor - 1} frame(s) at {bt0.shape[0]}×{bt0.shape[1]}…")
+            mids = [(j / factor, interpolate_pair_bt(bt0, bt2, model, j / factor)) for j in range(1, factor)]
+            status.update(label="Interpolation complete ✓", state="complete", expanded=False)
+        st.markdown(f"#### Result — **{chosen['label'].split(' (')[0]}**  ·  cold cloud tops shown bright")
+        seq = [("t0  (input)", bt0)] + [(f"t = {t:.2f}  (synthetic)", m) for t, m in mids] + [("t2  (input)", bt2)]
+        for col, (label, frame) in zip(st.columns(len(seq)), seq):
+            col.image(bt_to_rgb(frame, BT_MIN_DEFAULT, BT_MAX_DEFAULT), use_column_width=True)
+            col.markdown(f'<div class="cap">{label}</div>', unsafe_allow_html=True)
+
+        if show_overlay and hasattr(model, "flow"):
+            with st.expander("Estimated motion vectors (t0 → t2)", expanded=True):
+                try:
+                    flow = model.flow(bt_to_norm(bt0), bt_to_norm(bt2))
+                    st.image(flow_overlay_rgb(bt0, flow), use_column_width=True)
+                except Exception as e:
+                    st.info(f"Overlay unavailable for this model: {e}")
+
+        gt_src = upgt or (pickgt or None)
+        if gt_src and mids:
+            btgt = _load_bt(gt_src, source)
+            pred_mid = mids[len(mids) // 2][1]
+            if pred_mid.shape == btgt.shape:
+                m = metrics.compute_all(bt_to_norm(pred_mid), bt_to_norm(btgt), bt_min=BT_MIN_DEFAULT, bt_max=BT_MAX_DEFAULT)
+                st.markdown("#### Metrics vs ground truth")
+                keys = [k for k in ["psnr", "ssim", "fsim", "edge_ssim", "mse", "mae_kelvin", "lpips"] if k in m]
+                for col, k in zip(st.columns(len(keys)), keys):
+                    col.metric(k.upper().replace("_", " "), f"{m[k]:.4f}")
+
+# ---------------------------------------------------------------- Temporal Upscaling
+with tab_upscale:
+    st.info("**Temporal upscaling** densifies a frame sequence by inserting AI-synthesised frames "
+            "between each consecutive pair — recursively. For INSAT-3DS/3DR: **30 → 15 → 7.5 min**.")
+    cfgL, cfgR = st.columns([1, 2], gap="large")
+    with cfgL:
+        source_u = st.selectbox("Satellite source", ["insat3ds", "insat3dr", "goes19", "himawari9"], key="src_u")
+        chosen_u = _model_picker(models, "mdl_u")
+        levels = st.radio("Upscaling", [1, 2], horizontal=True, key="lvl_u",
+                          format_func=lambda L: "30→15 (×2)" if L == 1 else "30→15→7.5 (×4)")
+        base_step = st.number_input("Source cadence (min)", value=30, min_value=1, key="step_u")
+    with cfgR:
+        ups = st.file_uploader("Upload time-ordered frames (.nc/.h5)", type=["nc", "h5"],
+                               accept_multiple_files=True, key="seq_u")
+        picks = st.multiselect("…or pick samples (in time order)", [str(p) for p in sample_files], key="seqpick_u")
+    go_u = st.button("Upscale sequence", type="primary", key="btn_u", use_container_width=True)
+
+    if go_u:
+        seq_src = list(ups) if ups else list(picks)
+        if len(seq_src) < 2:
+            st.error("Provide at least 2 frames in time order."); st.stop()
+        model_u = get_model(chosen_u["name"], **chosen_u["kwargs"])
+        with st.status(f"Upscaling ×{2 ** levels}…", expanded=True) as status:
+            rbar = st.progress(0.0, text="📥 Loading frames…")
+            bts = []
+            for i, s in enumerate(seq_src):
+                bts.append(_load_bt(s, source_u))
+                rbar.progress((i + 1) / len(seq_src), text=f"📥 Loaded {i + 1}/{len(seq_src)} frames")
+            total = max(1, upscale_total_steps(len(bts), levels))
+            done = {"n": 0}
+            ibar = st.progress(0.0, text="✨ Synthesising intermediate frames…")
+
+            def _cb():
+                done["n"] += 1
+                ibar.progress(min(1.0, done["n"] / total), text=f"✨ Synthesised {done['n']}/{total} frames")
+
+            dense = temporal_upscale_bt(bts, model_u, levels=levels, progress=_cb)
+            status.update(label="Upscaling complete ✓", state="complete", expanded=False)
+        out_cad = base_step / (2 ** levels)
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Input frames", len(bts))
+        m2.metric("Output frames", len(dense))
+        m3.metric("Cadence", f"{out_cad:g} min", delta=f"-{base_step - out_cad:g} min", delta_color="inverse")
+        gif = Path(tempfile.gettempdir()) / "ps12_upscaled.gif"
+        try:
+            frames_to_gif(dense, gif, fps=4)
+            st.image(str(gif), caption=f"Upscaled time-lapse — {out_cad:g}-min cadence "
+                                       "(original frames preserved; intermediate frames synthetic)")
+        except Exception as e:
+            st.info(f"Animation unavailable ({e}); showing frames.")
+            for row in range(0, len(dense), 6):
+                for col, fr in zip(st.columns(6), dense[row:row + 6]):
+                    col.image(bt_to_rgb(fr, BT_MIN_DEFAULT, BT_MAX_DEFAULT), use_column_width=True)
+        st.caption("Write the dense `.nc` sequence with `src.infer.upscale.temporal_upscale_nc(...)`.")
+
+# ---------------------------------------------------------------- Validation Report
+with tab_valid:
+    st.markdown("#### Validation — interpolated vs real ground truth")
+    st.caption("Protocol: input frames 20 min apart → predict the held-out real 10-min middle → score "
+               "vs GOES/Himawari ground truth (INSAT: leave-one-out at 30 min).")
+    exps = sorted([d for d in VALIDATION_DIR.iterdir() if d.is_dir()]) if VALIDATION_DIR.exists() else []
+    if not exps:
+        st.info("No validation results yet. On the GPU server run `src.eval.report.run_eval(...)` "
+                "(walkthrough.md Step 8) and commit `validation_report/` — results then appear here.")
+    else:
+        exp = st.selectbox("Experiment", [d.name for d in exps], key="exp_v")
+        d = VALIDATION_DIR / exp
+        if (d / "report.md").exists():
+            st.markdown((d / "report.md").read_text(encoding="utf-8"))
+        pngs = sorted(d.glob("*.png"))
+        if pngs:
+            cols = st.columns(2)
+            for i, png in enumerate(pngs):
+                cols[i % 2].image(str(png), caption=png.name, use_column_width=True)
+        for gif in sorted(d.glob("*.gif")):
+            st.image(str(gif), caption=gif.name)
+
+st.divider()
+st.caption("PS12 · open-source backbones (RIFE · FILM · Super-SloMo · RAFT) + custom UNetVFI · "
+           "trained on GOES/Himawari, applied to INSAT-3DS/3DR · metrics: PSNR/SSIM/FSIM/MSE/MAE-K/LPIPS.")

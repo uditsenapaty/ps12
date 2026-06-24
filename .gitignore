@@ -1,0 +1,51 @@
+# --- secrets ---
+.env.local
+.env
+*.key
+
+# --- python venv / caches ---
+myenv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+
+# --- data & model weights (heavy; never commit) ---
+data/
+samples/
+outputs/
+weights/
+*.nc
+*.h5
+*.hdf
+*.hdf5
+*.bz2
+*.npz
+*.npy
+*.pth
+*.pt
+*.ckpt
+*.onnx
+*.tar
+*.tar.gz
+
+# --- cloned model repos: commit the CODE, drop nested git + heavy artifacts/demo media ---
+referred_clones/**/.git/
+referred_clones/**/__pycache__/
+referred_clones/**/*.mp4
+referred_clones/**/*.avi
+referred_clones/**/*.gif
+referred_clones/**/*.zip
+referred_clones/**/*.png
+referred_clones/**/*.jpg
+referred_clones/**/*.jpeg
+
+# --- session tooling (cloned skills, not project deliverables) ---
+.claude/
+
+# --- referred papers: keep the citation map (SOURCES.md), NOT the heavy PDFs ---
+referred_papers/*.pdf
+
+# --- os / editor ---
+.DS_Store
+Thumbs.db

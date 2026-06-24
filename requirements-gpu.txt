@@ -1,0 +1,27 @@
+# GPU-server dependencies — installed by `python data_setup.py --env` on the training box.
+# Install the CUDA build of torch FIRST, matched to the server's driver, e.g.:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+# then:  pip install -r requirements-gpu.txt
+#
+# Everything in requirements-local.txt is also required on the server.
+-r requirements-local.txt
+
+# --- training / optional SOTA backbones (cloned/pip as available) ---
+timm>=0.9               # backbone blocks used by some VFI nets
+einops>=0.7             # tensor ops used by EMA-VFI / VFIMamba
+lpips>=0.1.4            # standalone LPIPS (fallback to piq)
+tensorboard>=2.14       # training curves
+cupy-cuda12x; platform_system == "Linux"   # optional GPU-accelerated resampling
+
+# --- optional cloud connectors (used by connect.py; install only the one you use) ---
+# lightning-sdk        # Lightning.ai Studios/Jobs on a T4 (pip install lightning-sdk)
+# kaggle               # push GPU kernels (pip install kaggle)
+# pyngrok              # tunnel the remote dashboard to your local browser (cloud/serve_dashboard.py)
+
+# Model repos are cloned under referred_clones/<name>/ by `python data_setup.py --clone all`:
+#   RIFE        : github.com/hzwer/Practical-RIFE  (or ECCV2022-RIFE)
+#   FILM        : github.com/google-research/frame-interpolation  (Apache-2.0)
+#   Super-SloMo : github.com/avinashpaliwal/Super-SloMo
+#   RAFT        : github.com/princeton-vl/RAFT  (BSD)
+#   EMA-VFI     : github.com/MCG-NJU/EMA-VFI         (optional ceiling)
+#   VFIMamba    : github.com/MCG-NJU/VFIMamba        (optional ceiling)

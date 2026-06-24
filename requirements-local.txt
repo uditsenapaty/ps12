@@ -1,0 +1,41 @@
+# Local (CPU-only) dependencies — run on the dev PC, NO GPU required.
+# Used for: data I/O, normalization/tiling, metrics, deterministic battery,
+# CPU dry-run model forward passes, and the Streamlit dashboard on samples.
+
+# --- numerics / arrays ---
+numpy>=1.24,<2.1
+scipy>=1.10
+
+# --- satellite / geospatial I/O ---
+xarray>=2023.6
+netCDF4>=1.6
+h5py>=3.9
+satpy>=0.46
+pyresample>=1.27
+
+# --- cloud / transfer ---
+boto3>=1.28
+botocore>=1.31
+s3fs>=2023.6
+paramiko>=3.3          # cross-platform SFTP (MOSDAC) for local Windows
+python-dotenv>=1.0     # load .env.local
+
+# --- imaging / classical optical flow / metrics ---
+opencv-python>=4.8     # TV-L1 / Farneback classical baseline
+scikit-image>=0.21
+piq>=0.8               # SSIM / PSNR / FSIM / LPIPS
+imageio>=2.31
+imageio-ffmpeg>=0.4    # mp4/gif animation export
+matplotlib>=3.7
+
+# --- deep learning (CPU build locally; GPU build in requirements-gpu.txt) ---
+torch>=2.1             # CPU wheel locally; replaced by CUDA wheel on server
+torchvision>=0.16
+
+# --- dashboard ---
+streamlit>=1.28
+
+# --- tooling / tests ---
+pyyaml>=6.0
+tqdm>=4.66
+pytest>=7.4

@@ -1,0 +1,51 @@
+# PS12 default configuration. Override per-experiment with a copy in configs/.
+
+normalization:
+  bt_min: 180.0          # K — coldest realistic cloud top (10 µm window)
+  bt_max: 330.0          # K — hottest realistic surface
+
+tiling:
+  tile: 256              # training patch / inference tile size
+  overlap: 32            # feather-blend overlap for seamless full-disk reconstruction
+
+data:
+  sources: [goes19, himawari9]     # Steps 1-3 train/validate
+  target: insat3dr                  # Step 4 (apply best model); insat3ds for final delivery
+  step_min:
+    goes19: 10
+    himawari9: 10
+    insat3dr: 30
+    insat3ds: 30
+  region_crop: null                 # optional [lat0, lat1, lon0, lon1] to bound the 100 GB budget
+  max_gb: 80
+
+train:
+  model: rife                       # primary workhorse to fine-tune
+  lr: 1.0e-4
+  batch_size: 8                     # per-step tiles; use grad-accum on T4
+  grad_accum: 2
+  patch: 256
+  max_steps: 20000
+  val_every: 500
+  seed: 1234
+  augment: [flip, rot90]            # geometry-only (BT physical values preserved)
+  loss: [l1, census]                # photometric L1 + census/structure
+
+selfsup_insat:
+  enabled: true
+  step_min: 30                      # triplets (00:00, 00:30, 01:00) -> predict 00:30
+  init_from: train.model            # start from the GOES/Himawari fine-tuned weights
+  max_steps: 5000
+  lr: 5.0e-5
+
+eval:
+  models: [classical, raft, rife, film, superslomo]
+  factors: [2, 4]                   # 2x -> 15 min, 4x -> 7.5 min
+  metrics: [mse, psnr, ssim, fsim, lpips, edge_ssim, mae_kelvin]
+
+paths:
+  data_dir: data
+  samples_dir: samples
+  outputs_dir: outputs
+  weights_dir: weights
+  index_dir: data/index
