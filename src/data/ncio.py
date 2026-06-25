@@ -76,9 +76,11 @@ def write_nc(
 
 def read_nc(path: str | Path) -> tuple[np.ndarray, datetime, dict]:
     """Read a BT NetCDF written by `write_nc`. Returns (bt_kelvin, time, attrs)."""
-    with xr.open_dataset(path) as ds:
+    # decode_times=False keeps `time` as the raw float seconds we wrote (xarray would otherwise
+    # auto-decode the CF units to datetime64, and float() of that overflows).
+    with xr.open_dataset(path, decode_times=False) as ds:
         bt = ds["BT"].values.astype(np.float32)
         secs = float(ds["time"].values)
-        t = _EPOCH.replace(tzinfo=timezone.utc) + (datetime.fromtimestamp(secs, tz=timezone.utc) - _EPOCH)
+        t = datetime.fromtimestamp(secs, tz=timezone.utc)
         attrs = dict(ds.attrs)
     return bt, t, attrs
