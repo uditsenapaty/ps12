@@ -5,16 +5,17 @@
 
 # --- python venv / caches ---
 myenv/
+myenv_broken/
 __pycache__/
 *.py[cod]
 .pytest_cache/
 .ipynb_checkpoints/
 
-# --- data & model weights (heavy; never commit) ---
-data/
-samples/
-outputs/
-weights/
+# --- data & model weights (heavy; never commit). Root-anchored so src/data/ is NOT ignored! ---
+/data/
+/samples/
+/outputs/
+/weights/
 *.nc
 *.h5
 *.hdf
