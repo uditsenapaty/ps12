@@ -14,7 +14,7 @@ W, H = 1600, 900
 PXIN = 160.0  # px per inch
 MEDIA = r"D:\Udit\gitclones\ps12\_tpl_media"
 OUT = r"D:\Udit\gitclones\ps12\_preview"; os.makedirs(OUT, exist_ok=True)
-FILE = [s for s in glob.glob(r"D:\Udit\gitclones\ps12\*.pptx") if "FILLED" in s][0]
+FILE = max([s for s in glob.glob(r"D:\Udit\gitclones\ps12\*.pptx") if "FILLED" in s], key=os.path.getmtime)
 
 
 def font(sz, bold=False):

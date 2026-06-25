@@ -344,28 +344,34 @@ for ex, dx, ytop in skips:
     conn(sl, ex, ytop, dx, ytop, MUTE, w=0.9, head=False, dash="dash")
     conn(sl, dx, ytop, dx, cy - dech[decx.index(dx)] / 2, MUTE, w=0.9, dash="dash")
 tb(sl, 4.3, 1.6, 2.0, 0.2, [{"t": "skip connections", "s": 8.5, "c": MUTE, "i": True, "align": PP_ALIGN.CENTER}], align=PP_ALIGN.CENTER)
-# head -> flow + mask
-conn(sl, decx[2] + 0.27, cy, 7.25, cy, INK, w=1.3)
-for i, (lab, c, sub) in enumerate([("flow t→0", ORANGE, "2ch"), ("flow t→1", ORANGE, "2ch"), ("mask M", RGBColor(0xD4, 0xA0, 0x17), "1ch σ")]):
-    rect(sl, 7.3, 2.05 + i * 0.66, 1.25, 0.56, c, radius=0.14)
-    settext(sl.shapes[-1], [{"t": lab, "s": 9.5, "c": WHITE, "b": True, "sa": 0, "align": PP_ALIGN.CENTER},
-            {"t": sub, "s": 7.5, "c": WHITE, "align": PP_ALIGN.CENTER}], align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
-conn(sl, 8.55, 2.9, 8.75, 2.9, INK, w=1.3)
-rect(sl, 8.78, 2.5, 0.95, 0.85, NAVY, radius=0.1)
-settext(sl.shapes[-1], [{"t": "warp", "s": 9.5, "c": WHITE, "b": True, "sa": 0, "align": PP_ALIGN.CENTER},
-        {"t": "+ blend", "s": 9, "c": WHITE, "align": PP_ALIGN.CENTER}], align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
-irframe(sl, 8.95, 3.5, 0.62, 0.5, accent=GREEN)
-tb(sl, 8.75, 4.0, 1.0, 0.2, [{"t": "I(t)", "s": 10, "c": GREEN, "b": True, "align": PP_ALIGN.CENTER}], align=PP_ALIGN.CENTER)
-conn(sl, 9.25, 3.35, 9.25, 3.48, GREEN, w=1.3)
+# head -> flow + mask + source(PINN)
+conn(sl, decx[2] + 0.27, cy, 7.22, cy, INK, w=1.3)
+heads = [("flow t→0", ORANGE, "2ch"), ("flow t→1", ORANGE, "2ch"),
+         ("mask M", RGBColor(0xD4, 0xA0, 0x17), "1ch · σ"), ("source S", TEAL, "1ch · PINN")]
+for i, (lab, c, sub) in enumerate(heads):
+    rect(sl, 7.28, 1.92 + i * 0.5, 1.22, 0.44, c, radius=0.16)
+    settext(sl.shapes[-1], [{"t": lab, "s": 9, "c": WHITE, "b": True, "sa": 0, "align": PP_ALIGN.CENTER},
+            {"t": sub, "s": 7, "c": WHITE, "align": PP_ALIGN.CENTER}], align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
+conn(sl, 8.5, 2.62, 8.72, 2.62, INK, w=1.3)                       # flows+mask -> warp
+conn(sl, 8.5, 3.42, 8.72, 3.42, TEAL, w=1.1, dash="dash")          # source -> PINN loss (training only)
+rect(sl, 8.74, 2.25, 0.92, 0.78, NAVY, radius=0.1)
+settext(sl.shapes[-1], [{"t": "warp", "s": 9, "c": WHITE, "b": True, "sa": 0, "align": PP_ALIGN.CENTER},
+        {"t": "+ blend", "s": 8.5, "c": WHITE, "align": PP_ALIGN.CENTER}], align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
+irframe(sl, 8.9, 3.2, 0.6, 0.46, accent=GREEN)
+tb(sl, 8.72, 3.66, 0.95, 0.2, [{"t": "I(t)", "s": 9.5, "c": GREEN, "b": True, "align": PP_ALIGN.CENTER}], align=PP_ALIGN.CENTER)
+conn(sl, 9.2, 3.05, 9.2, 3.18, GREEN, w=1.3)
+tb(sl, 8.55, 3.86, 1.1, 0.2, [{"t": "PINN loss", "s": 7.5, "c": TEAL, "i": True, "align": PP_ALIGN.CENTER}], align=PP_ALIGN.CENTER)
 # caption strip
-rect(sl, 0.55, 4.55, 9.0, 0.7, MIST, line=HAIR, radius=0.08)
-tb(sl, 0.75, 4.6, 8.7, 0.65, [
-    {"runs": [{"t": "RIFE-style intermediate flow + Super-SloMo visibility blending", "s": 10.5, "c": INK, "b": True},
-              {"t": "  ·  ~2–5M params  ·  trains from scratch on GOES/Himawari in hours on a T4  ·  "
-                    "self-supervised on INSAT.", "s": 10.5, "c": SLATE}]},
-    {"runs": [{"t": "System:  ", "s": 10, "c": VIOLET, "b": True},
-              {"t": "Local dev → GitHub → Lightning.ai T4 (train + infer, 100 GB persist) → Streamlit "
-                    "dashboard in your browser.", "s": 10, "c": SLATE}]}])
+rect(sl, 0.55, 4.5, 9.0, 0.9, MIST, line=HAIR, radius=0.06)
+tb(sl, 0.75, 4.55, 8.7, 0.85, [
+    {"runs": [{"t": "Blend:  ", "s": 9.5, "c": VIOLET, "b": True},
+              {"t": "I(t) = M·warp(I₀, F_{t→0}) + (1−M)·warp(I₂, F_{t→1})", "s": 9.5, "c": INK, "b": True},
+              {"t": "   — RIFE-style intermediate flow + Super-SloMo visibility mask.", "s": 9.5, "c": SLATE}], "sa": 2},
+    {"runs": [{"t": "Physics-informed (PINN, training):  ", "s": 9.5, "c": TEAL, "b": True},
+              {"t": "advection ∂I/∂t + u·grad(I) = S — source S models cloud growth; +0.12 PSNR measured.",
+               "s": 9.5, "c": SLATE}], "sa": 2},
+    {"runs": [{"t": "~2–5M params · trains on a T4 in hours · self-supervised on INSAT · "
+                    "Local → GitHub → Lightning T4 → Streamlit.", "s": 9, "c": SLATE}]}])
 
 # ===============================================================================
 # SLIDE 8 — Technologies (clean rows, colored dot, no bars)
@@ -439,5 +445,10 @@ settext(sl.shapes[-1], [{"runs": [
     anchor=MSO_ANCHOR.MIDDLE)
 
 OUT = r"D:\Udit\gitclones\ps12\ISRO_BAH_2026_PS12 - FILLED.pptx"
-prs.save(OUT)
+try:
+    prs.save(OUT)
+except PermissionError:
+    OUT = OUT.replace(".pptx", " (rebuilt).pptx")  # main file is open in PowerPoint
+    prs.save(OUT)
+    print("NOTE: main file was locked (open in PowerPoint) — saved to a new file.")
 print("SAVED:", OUT, "| slides:", len(S))
