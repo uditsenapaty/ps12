@@ -122,10 +122,11 @@ def main():
     ap.add_argument("--base", type=int, default=32)
     ap.add_argument("--device", default=None)
     ap.add_argument("--workers", type=int, default=0)
+    ap.add_argument("--val-every", type=int, default=500)
     ap.add_argument("--init", default=None, help="warm-start weights (.pt)")
     a = ap.parse_args()
     train(a.index, a.out, a.steps, a.lr, a.batch, a.patch, a.base, a.device, a.val_index,
-          workers=a.workers, init_weights=a.init)
+          val_every=a.val_every, workers=a.workers, init_weights=a.init)
 
 
 if __name__ == "__main__":

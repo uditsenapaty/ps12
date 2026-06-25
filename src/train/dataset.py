@@ -16,7 +16,7 @@ from ..data.normalize import BT_MAX_DEFAULT, BT_MIN_DEFAULT, bt_to_norm, fill_in
 from ..data.readers import read_frame
 
 
-@lru_cache(maxsize=48)
+@lru_cache(maxsize=512)  # hold all frames in memory (cropped) so reads hit cache after warmup
 def _read_norm(path: str, source: str, bt_min: float, bt_max: float, crop_frac: float) -> np.ndarray:
     """Cached read -> normalized [0,1] (NaN-filled with 0). Cache avoids re-reading shared frames.
     `crop_frac` reads only the central fraction of the disk (big training speed-up for GOES full disk)."""
