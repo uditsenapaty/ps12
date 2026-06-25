@@ -17,7 +17,7 @@ import numpy as np
 from ..eval.metrics import psnr, ssim
 from ..models.unet_vfi import build_net
 from .dataset import SatTripletDataset
-from .losses import combined_loss
+from .losses import advection_physics_loss, combined_loss
 
 
 def _loader(ds, batch_size, shuffle, workers=0):
@@ -47,7 +47,8 @@ def validate(net, ds, device, n: int = 8) -> dict:
 
 def train(index: str, out: str, steps: int = 20000, lr: float = 1e-4, batch: int = 8,
           patch: int = 256, base: int = 32, device: str | None = None, val_index: str | None = None,
-          val_every: int = 500, workers: int = 0, init_weights: str | None = None) -> Path:
+          val_every: int = 500, workers: int = 0, init_weights: str | None = None,
+          pinn: bool = False, pinn_weight: float = 0.1) -> Path:
     import torch
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     ds = SatTripletDataset(index_json=index, patch=patch)
@@ -60,8 +61,10 @@ def train(index: str, out: str, steps: int = 20000, lr: float = 1e-4, batch: int
 
     net = build_net()(base).to(device).train()
     if init_weights and Path(init_weights).exists():
-        net.load_state_dict(torch.load(init_weights, map_location=device)["model"])
+        net.load_state_dict(torch.load(init_weights, map_location=device)["model"], strict=False)
         print(f"[train] initialized from {init_weights}")
+    if pinn:
+        print(f"[train] PINN physics loss ON (weight {pinn_weight})")
     opt = torch.optim.AdamW(net.parameters(), lr=lr, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=steps)
 
@@ -72,12 +75,16 @@ def train(index: str, out: str, steps: int = 20000, lr: float = 1e-4, batch: int
     while step < steps:
         for b in loader:
             i0, gt, i1 = b["I0"].to(device), b["GT"].to(device), b["I1"].to(device)
-            pred = net(i0, i1, 0.5)
-            loss = combined_loss(pred, gt)
+            if pinn:
+                pred, f_t0, f_t1, _mask, source = net(i0, i1, 0.5, return_aux=True)
+                loss = combined_loss(pred, gt) + pinn_weight * advection_physics_loss(i0, i1, f_t0, f_t1, source)
+            else:
+                pred = net(i0, i1, 0.5)
+                loss = combined_loss(pred, gt)
             opt.zero_grad(); loss.backward(); opt.step(); sched.step()
             step += 1
             if step % 50 == 0:
-                print(f"[train] step {step}/{steps}  loss {loss.item():.4f}")
+                print(f"[train] step {step}/{steps}  loss {loss.item():.4f}{'  (+PINN)' if pinn else ''}")
             if step % val_every == 0 or step == steps:
                 m = validate(net, val_ds, device)
                 print(f"[val] step {step}  psnr {m['psnr']:.3f}  ssim {m['ssim']:.4f}")
@@ -124,9 +131,12 @@ def main():
     ap.add_argument("--workers", type=int, default=0)
     ap.add_argument("--val-every", type=int, default=500)
     ap.add_argument("--init", default=None, help="warm-start weights (.pt)")
+    ap.add_argument("--pinn", action="store_true", help="add the physics-informed (advection) loss")
+    ap.add_argument("--pinn-weight", type=float, default=0.1)
     a = ap.parse_args()
     train(a.index, a.out, a.steps, a.lr, a.batch, a.patch, a.base, a.device, a.val_index,
-          val_every=a.val_every, workers=a.workers, init_weights=a.init)
+          val_every=a.val_every, workers=a.workers, init_weights=a.init,
+          pinn=a.pinn, pinn_weight=a.pinn_weight)
 
 
 if __name__ == "__main__":

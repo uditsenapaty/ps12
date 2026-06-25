@@ -57,7 +57,8 @@ def build_net():
             self.u3 = Up(base * 8 + base * 4, base * 4)
             self.u2 = Up(base * 4 + base * 2, base * 2)
             self.u1 = Up(base * 2 + base, base)
-            self.head = nn.Conv2d(base, 5, 3, 1, 1)
+            self.head = nn.Conv2d(base, 5, 3, 1, 1)            # flow_t0(2), flow_t1(2), mask(1)
+            self.src_head = nn.Conv2d(base, 1, 3, 1, 1)        # PINN source term S(x) (cloud growth/decay)
 
         @staticmethod
         def _warp(img, flow):
@@ -69,7 +70,7 @@ def build_net():
             vgrid[:, 1] = 2.0 * vgrid[:, 1] / max(H - 1, 1) - 1.0
             return F.grid_sample(img, vgrid.permute(0, 2, 3, 1), mode="bilinear", padding_mode="border", align_corners=True)
 
-        def forward(self, i0, i1, t: float = 0.5):
+        def forward(self, i0, i1, t: float = 0.5, return_aux: bool = False):
             x0 = self.inc(torch.cat([i0, i1], 1))
             x1 = self.d1(x0)
             x2 = self.d2(x1)
@@ -83,8 +84,11 @@ def build_net():
             mask = torch.sigmoid(out[:, 4:5])
             w0 = self._warp(i0, f_t0)
             w1 = self._warp(i1, f_t1)
-            pred = mask * w0 + (1 - mask) * w1
-            return pred.clamp(0, 1)
+            pred = (mask * w0 + (1 - mask) * w1).clamp(0, 1)
+            if return_aux:                 # for the PINN physics loss
+                source = self.src_head(y)
+                return pred, f_t0, f_t1, mask, source
+            return pred
 
     return UNetVFINet
 
@@ -122,7 +126,7 @@ class UNetVFIInterpolator(Interpolator):
         state = torch.load(cks[0], map_location=self._device)
         base = state.get("base", self._base)
         net = build_net()(base).to(self._device).eval()
-        net.load_state_dict(state["model"])
+        net.load_state_dict(state["model"], strict=False)  # tolerate checkpoints w/o the PINN source head
         self._net = net
         torch.set_grad_enabled(False)
 

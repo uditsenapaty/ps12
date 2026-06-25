@@ -101,9 +101,12 @@ def connect_lightning(do_train: bool, full_data: bool, do_serve: bool = False, b
     repo_url = get_or_prompt("REPO_URL", "git URL of this repo (recommended)", secret=False, required=False)
 
     from lightning_sdk import Machine, Studio
-    print(f"[lightning] starting Studio '{studio_name}' on a T4 …")
+    print(f"[lightning] starting Studio '{studio_name}' on a T4 (on-demand / non-interruptible) …")
     studio = Studio(name=studio_name, teamspace=teamspace, create_ok=True)
-    studio.start(Machine.T4)
+    try:
+        studio.start(Machine.T4, interruptible=False)   # T4 = cheapest GPU; on-demand = non-interruptible
+    except TypeError:
+        studio.start(Machine.T4)
 
     if repo_url:
         studio.run(f"[ -d ps12 ] || git clone {repo_url} ps12")

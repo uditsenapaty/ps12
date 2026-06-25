@@ -106,9 +106,15 @@ def main():
     studio = get_studio()
     if do_start:
         from lightning_sdk import Machine
-        print(f"[lightning] starting Studio on T4 …")
+        # T4 = cheapest GPU on Lightning; on-demand (interruptible=False) = non-interruptible default.
+        print("[lightning] starting Studio on T4 (on-demand / non-interruptible) …")
         try:
-            studio.start(Machine.T4)
+            studio.start(Machine.T4, interruptible=False)
+        except TypeError:
+            try:
+                studio.start(Machine.T4)
+            except Exception as e:
+                print(f"[lightning] start note: {e} (may already be running)")
         except Exception as e:
             print(f"[lightning] start note: {e} (may already be running)")
     if cmd:
