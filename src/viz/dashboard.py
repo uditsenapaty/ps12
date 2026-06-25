@@ -41,6 +41,7 @@ from src.infer.interpolate import interpolate_pair_bt  # noqa: E402
 from src.infer.upscale import temporal_upscale_bt, upscale_total_steps  # noqa: E402
 from src.models.factory import discover_models, get_model  # noqa: E402
 from src.viz.animate import bt_to_rgb, flow_overlay_rgb, frames_to_gif  # noqa: E402
+from src.viz.compute import get_backend  # noqa: E402
 
 VALIDATION_DIR = ROOT / "validation_report"
 SAMPLES_DIR = ROOT / "samples"
@@ -91,6 +92,9 @@ def _model_picker(models, key: str):
 
 models = _models()
 sample_files = sorted([p for p in SAMPLES_DIR.rglob("*") if p.suffix.lower() in (".nc", ".h5")])
+if "backend" not in st.session_state:   # default to Local so local INSAT data shows on first load
+    st.session_state["backend"] = get_backend("Local")
+    st.session_state["backend_msg"] = "local CPU/GPU"
 
 # ---------------------------------------------------------------- sidebar (status)
 with st.sidebar:
@@ -107,8 +111,37 @@ with st.sidebar:
     st.markdown("**System status**")
     st.markdown(f"- Sample frames found: **{len(sample_files)}**")
     st.markdown(f"- Validation experiments: **{len(list(VALIDATION_DIR.glob('*/'))) if VALIDATION_DIR.exists() else 0}**")
-    st.caption("Heavy training/inference runs on the GPU server (see walkthrough.md & connect.py). "
-               "Classical + RAFT run locally on CPU.")
+    st.divider()
+    st.markdown("**Compute backend**")
+    bk_kind = st.radio("backend", ["Local (CPU/GPU)", "Lightning.ai (T4)"], key="bk_kind",
+                       label_visibility="collapsed")
+    if st.button("🔌 Connect", key="btn_connect", use_container_width=True):
+        try:
+            b = get_backend(bk_kind)
+            with st.spinner(f"Connecting to {b.name}…"):
+                msg = b.connect()
+            st.session_state["backend"] = b
+            st.session_state["backend_msg"] = msg
+            st.success(f"Connected · {b.name}")
+        except Exception as e:
+            st.session_state.pop("backend", None)
+            st.error(f"Connect failed: {e}")
+    _bk = st.session_state.get("backend")
+    if _bk is not None:
+        st.caption(f"● **{_bk.name}** — {str(st.session_state.get('backend_msg',''))[:55]}")
+        try:
+            _insat = _bk.list_insat()
+            st.caption(f"INSAT files available: **{len(_insat)}**")
+            if getattr(_bk, "remote", False) and len(_insat) == 0:
+                if st.button("⬇ Download INSAT sample (on Studio)", key="dl_insat", use_container_width=True):
+                    u, p = os.environ.get("MOSDAC_USERNAME", ""), os.environ.get("MOSDAC_PASSWORD", "")
+                    with st.spinner("Ordering already done on MOSDAC — pulling via SFTP on the Studio…"):
+                        st.code(_bk.download_insat(u, p)); st.rerun()
+        except Exception as e:
+            st.caption(f"data check: {e}")
+    else:
+        st.caption("Not connected — local CPU is used. Pick **Lightning.ai** + Connect for the T4 + "
+                   "server-side INSAT files.")
 
 tab_interp, tab_upscale, tab_valid = st.tabs(["▶  Interpolate", "🔼  Temporal Upscaling", "📊  Validation Report"])
 
@@ -122,25 +155,58 @@ with tab_interp:
         factor = st.radio("Output cadence", [2, 4], horizontal=True, key="fac_i",
                           format_func=lambda f: "2× (e.g. 30→15)" if f == 2 else "4× (→7.5)")
         show_overlay = st.checkbox("Motion-vector overlay", value=True, key="ov_i")
+        _bk_i = st.session_state.get("backend")
+        on_server = st.checkbox("Use server (Lightning) files", value=False, key="srv_i",
+                                help="Pick INSAT files already on the Studio; inference runs on the T4.")
+    use_remote = bool(on_server and _bk_i is not None and getattr(_bk_i, "remote", False))
     with right:
         st.markdown("#### Inputs — two consecutive frames (+ optional ground-truth middle)")
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            up0 = st.file_uploader("Frame t0", type=["nc", "h5"], key="f0")
-            pick0 = st.selectbox("…or sample t0", [""] + [str(p) for p in sample_files], key="p0")
-        with c2:
-            up1 = st.file_uploader("Frame t2", type=["nc", "h5"], key="f1")
-            pick1 = st.selectbox("…or sample t2", [""] + [str(p) for p in sample_files], key="p1")
-        with c3:
-            upgt = st.file_uploader("GT middle t1", type=["nc", "h5"], key="fgt")
-            pickgt = st.selectbox("…or sample t1 (GT)", [""] + [str(p) for p in sample_files], key="pgt")
+        sp0 = sp2 = up0 = up1 = upgt = pick0 = pick1 = pickgt = None
+        if use_remote:
+            try:
+                srv = _bk_i.list_insat()
+            except Exception as e:
+                srv = []; st.warning(f"Could not list server files: {e}")
+            if not srv:
+                st.info("No INSAT files on the Studio yet — use the sidebar **Download INSAT sample** first.")
+            sc1, sc2 = st.columns(2)
+            sp0 = sc1.selectbox("Server frame t0", [""] + srv, key="sp0")
+            sp2 = sc2.selectbox("Server frame t2", [""] + srv, key="sp2")
+        else:
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                up0 = st.file_uploader("Frame t0", type=["nc", "h5"], key="f0")
+                pick0 = st.selectbox("…or sample t0", [""] + [str(p) for p in sample_files], key="p0")
+            with c2:
+                up1 = st.file_uploader("Frame t2", type=["nc", "h5"], key="f1")
+                pick1 = st.selectbox("…or sample t2", [""] + [str(p) for p in sample_files], key="p1")
+            with c3:
+                upgt = st.file_uploader("GT middle t1", type=["nc", "h5"], key="fgt")
+                pickgt = st.selectbox("…or sample t1 (GT)", [""] + [str(p) for p in sample_files], key="pgt")
     go = st.button("Interpolate", type="primary", key="btn_i", use_container_width=True)
 
-    if go:
+    if go and use_remote:
+        if not sp0 or not sp2:
+            st.error("Pick both server frames."); st.stop()
+        with st.status("Running interpolation on the Lightning T4…", expanded=True) as status:
+            st.write(f"🛰️ {Path(sp0).name}  +  {Path(sp2).name}")
+            st.write(f"🧠 {chosen['label'].split(' (')[0]} · factor {factor}× · on the T4")
+            rkw = {k: v for k, v in (chosen["kwargs"] or {}).items() if k != "weights_dir"}  # studio resolves its own weights
+            mids = []
+            for j in range(1, factor):
+                mids.append((j / factor, _bk_i.interpolate_bt(source, sp0, sp2, chosen["name"], rkw, j / factor)))
+            status.update(label="Done on T4 ✓ (preview downsampled)", state="complete", expanded=False)
+        st.markdown(f"#### Synthetic frame(s) — **{chosen['label'].split(' (')[0]}** on Lightning T4")
+        for col, (t, fr) in zip(st.columns(max(1, len(mids))), mids):
+            col.image(bt_to_rgb(fr, BT_MIN_DEFAULT, BT_MAX_DEFAULT), use_column_width=True)
+            col.markdown(f'<div class="cap">t = {t:.2f} (synthetic · ¼-res preview)</div>', unsafe_allow_html=True)
+        st.caption("Full-resolution .nc is written on the Studio; the preview is downsampled for transfer.")
+
+    if go and not use_remote:
         src0, src2 = up0 or (pick0 or None), up1 or (pick1 or None)
         if not src0 or not src2:
             st.error("Provide both t0 and t2 (upload or pick a sample)."); st.stop()
-        with st.status("Running interpolation…", expanded=True) as status:
+        with st.status("Running interpolation (local)…", expanded=True) as status:
             st.write("📥 Loading frame **t0**…"); bt0 = _load_bt(src0, source)
             st.write("📥 Loading frame **t2**…"); bt2 = _load_bt(src2, source)
             st.write(f"🧠 Loading model **{chosen['label'].split(' (')[0]}**…")
