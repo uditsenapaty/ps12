@@ -50,3 +50,6 @@ referred_papers/*.pdf
 # --- os / editor ---
 .DS_Store
 Thumbs.db
+
+# generated/heavy decks (regenerate via scripts/build_ppt.py)
+*.pptx
