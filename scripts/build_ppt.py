@@ -1,336 +1,442 @@
 #!/usr/bin/env python
-"""Fill the ISRO BAH 2026 idea-submission template with the PS-12 idea.
+"""Fill the ISRO BAH 2026 idea-submission template with the PS-12 idea — world-class, professional.
 
-Beginner->advanced, concise, with small math snippets and colourful research-paper-style diagrams
-(process flow on slide 5, dashboard wireframe on 6, custom UNetVFI architecture on 7).
-Run:  python scripts/build_ppt.py   ->  writes "ISRO_BAH_2026_PS12 - FILLED.pptx"
+Designed FOR the template: black header band (logos) + WHITE body + orange->purple->blue bottom rule.
+Clean light slides, dark text, tasteful accents (ISRO orange / blue / violet), thin arrow-headed
+connectors, a research-paper U-Net figure, and a realistic dashboard mock. No left-bar cards, no
+"Thank You". Run:  python scripts/build_ppt.py  -> "ISRO_BAH_2026_PS12 - FILLED.pptx"
 """
 import glob
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
-from pptx.enum.shapes import MSO_SHAPE
+from pptx.enum.shapes import MSO_SHAPE, MSO_CONNECTOR
+from pptx.oxml.ns import qn
 
-# ---- palette ------------------------------------------------------------------
-NAVY = RGBColor(0x0E, 0x24, 0x44); BLUE = RGBColor(0x2E, 0x86, 0xC1); TEAL = RGBColor(0x11, 0x9D, 0x8B)
-PURPLE = RGBColor(0x7D, 0x3C, 0x98); GREEN = RGBColor(0x1F, 0x9D, 0x55); ORANGE = RGBColor(0xE5, 0x7E, 0x1E)
-RED = RGBColor(0xC0, 0x39, 0x2B); GOLD = RGBColor(0xD4, 0xA0, 0x17)
-DARK = RGBColor(0x1B, 0x26, 0x38); GREY = RGBColor(0x6B, 0x7A, 0x8C); WHITE = RGBColor(0xFF, 0xFF, 0xFF)
-CARD = RGBColor(0xFF, 0xFF, 0xFF); LIGHT = RGBColor(0xEF, 0xF3, 0xF7); INK = RGBColor(0x23, 0x2F, 0x3E)
+# ---- design tokens ------------------------------------------------------------
+FONT = "Segoe UI"
+INK = RGBColor(0x16, 0x22, 0x3A); SLATE = RGBColor(0x55, 0x63, 0x77); MUTE = RGBColor(0x8A, 0x97, 0xA8)
+HAIR = RGBColor(0xE3, 0xE9, 0xF0); MIST = RGBColor(0xF4, 0xF7, 0xFB); WHITE = RGBColor(0xFF, 0xFF, 0xFF)
+ORANGE = RGBColor(0xF2, 0x6A, 0x1B); BLUE = RGBColor(0x27, 0x6E, 0xF0); VIOLET = RGBColor(0x6B, 0x4E, 0xE0)
+TEAL = RGBColor(0x10, 0xA5, 0x9A); GREEN = RGBColor(0x1B, 0xA1, 0x66); NAVY = RGBColor(0x12, 0x1E, 0x36)
+# encoder blue gradient (shallow->deep) / decoder teal gradient
+ENC = [RGBColor(0x9D, 0xC2, 0xFF), RGBColor(0x5E, 0x97, 0xF5), RGBColor(0x35, 0x6F, 0xE0), RGBColor(0x1E, 0x49, 0xB8)]
+DEC = [RGBColor(0x2C, 0x9B, 0x93), RGBColor(0x46, 0xB3, 0xA9), RGBColor(0x7C, 0xCF, 0xC7)]
+IRBG = RGBColor(0x1A, 0x24, 0x36)
 
-SRC = glob.glob(r"D:\Udit\gitclones\ps12\*.pptx")
-SRC = [s for s in SRC if "FILLED" not in s][0]
+SRC = [s for s in glob.glob(r"D:\Udit\gitclones\ps12\*.pptx") if "FILLED" not in s][0]
 prs = Presentation(SRC)
 S = list(prs.slides)
 
 
-# ---- helpers ------------------------------------------------------------------
-def _noshadow(sh):
+# ---- primitives ---------------------------------------------------------------
+def _ns(sh):
     sh.shadow.inherit = False
     return sh
 
 
-def box(sl, l, t, w, h, fill, line=None, rounded=True):
-    sh = sl.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE if rounded else MSO_SHAPE.RECTANGLE,
-                             Inches(l), Inches(t), Inches(w), Inches(h))
-    sh.fill.solid(); sh.fill.fore_color.rgb = fill
-    if line is None:
-        sh.line.fill.background()
-    else:
-        sh.line.color.rgb = line; sh.line.width = Pt(1)
-    return _noshadow(sh)
+def _run(p, t, s, c, b=False, i=False):
+    r = p.add_run(); r.text = t
+    f = r.font; f.size = Pt(s); f.color.rgb = c; f.bold = b; f.italic = i; f.name = FONT
+    return r
 
 
-def arrow(sl, l, t, w, h, color=GREY, shape=MSO_SHAPE.RIGHT_ARROW):
-    a = sl.shapes.add_shape(shape, Inches(l), Inches(t), Inches(w), Inches(h))
-    a.fill.solid(); a.fill.fore_color.rgb = color; a.line.fill.background()
-    return _noshadow(a)
-
-
-def settext(sh, runs, align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE, wrap=True):
+def settext(sh, lines, align=PP_ALIGN.LEFT, anchor=MSO_ANCHOR.TOP, wrap=True):
     tf = sh.text_frame; tf.word_wrap = wrap; tf.vertical_anchor = anchor
-    tf.margin_left = tf.margin_right = Pt(4); tf.margin_top = tf.margin_bottom = Pt(2)
-    for i, r in enumerate(runs):
-        p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
-        p.alignment = r.get("align", align); p.space_after = Pt(r.get("sa", 2)); p.space_before = Pt(0)
-        run = p.add_run(); run.text = r["t"]
-        run.font.size = Pt(r.get("s", 12)); run.font.bold = r.get("b", False)
-        run.font.italic = r.get("i", False); run.font.color.rgb = r.get("c", WHITE)
+    tf.margin_left = Pt(6); tf.margin_right = Pt(6); tf.margin_top = Pt(3); tf.margin_bottom = Pt(3)
+    for j, ln in enumerate(lines):
+        p = tf.paragraphs[0] if j == 0 else tf.add_paragraph()
+        p.alignment = ln.get("align", align); p.space_after = Pt(ln.get("sa", 3)); p.space_before = Pt(0)
+        if isinstance(ln.get("runs"), list):
+            for rr in ln["runs"]:
+                _run(p, rr["t"], rr.get("s", 12), rr.get("c", INK), rr.get("b", False), rr.get("i", False))
+        else:
+            _run(p, ln["t"], ln.get("s", 12), ln.get("c", INK), ln.get("b", False), ln.get("i", False))
     return sh
 
 
-def textbox(sl, l, t, w, h, runs, align=PP_ALIGN.LEFT, anchor=MSO_ANCHOR.TOP):
-    tb = sl.shapes.add_textbox(Inches(l), Inches(t), Inches(w), Inches(h))
-    settext(tb, runs, align=align, anchor=anchor)
-    return tb
+def rect(sl, l, t, w, h, fill, line=None, lw=0.75, rounded=True, radius=0.08):
+    sh = sl.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE if rounded else MSO_SHAPE.RECTANGLE,
+                             Inches(l), Inches(t), Inches(w), Inches(h))
+    if fill is None:
+        sh.fill.background()
+    else:
+        sh.fill.solid(); sh.fill.fore_color.rgb = fill
+    if line is None:
+        sh.line.fill.background()
+    else:
+        sh.line.color.rgb = line; sh.line.width = Pt(lw)
+    if rounded:
+        try:
+            sh.adjustments[0] = radius
+        except Exception:
+            pass
+    return _ns(sh)
 
 
-def title_bar(sl, text, sub=None):
-    b = box(sl, 0.35, 0.6, 9.3, 0.62, NAVY)
-    runs = [{"t": text, "s": 20, "b": True, "c": WHITE, "align": PP_ALIGN.LEFT}]
-    settext(b, runs, align=PP_ALIGN.LEFT, anchor=MSO_ANCHOR.MIDDLE)
-    if sub:
-        textbox(sl, 0.4, 1.18, 9.2, 0.3, [{"t": sub, "s": 11, "i": True, "c": GREY}])
+def oval(sl, l, t, w, h, fill, line=None):
+    o = sl.shapes.add_shape(MSO_SHAPE.OVAL, Inches(l), Inches(t), Inches(w), Inches(h))
+    o.fill.solid(); o.fill.fore_color.rgb = fill
+    if line is None:
+        o.line.fill.background()
+    else:
+        o.line.color.rgb = line; o.line.width = Pt(1)
+    return _ns(o)
 
 
-def card(sl, l, t, w, h, runs, fill=CARD, bar=None):
-    c = box(sl, l, t, w, h, fill, line=RGBColor(0xD5, 0xDC, 0xE3))
-    if bar:
-        box(sl, l, t, 0.08, h, bar)
-    settext(c, runs, align=PP_ALIGN.LEFT, anchor=MSO_ANCHOR.TOP)
-    return c
+def conn(sl, x1, y1, x2, y2, color=INK, w=1.3, head=True, dash=None):
+    c = sl.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(x1), Inches(y1), Inches(x2), Inches(y2))
+    c.line.color.rgb = color; c.line.width = Pt(w)
+    ln = c.line._get_or_add_ln()
+    if head:
+        ln.append(ln.makeelement(qn("a:tailEnd"), {"type": "triangle", "w": "med", "len": "med"}))
+    if dash:
+        ln.append(ln.makeelement(qn("a:prstDash"), {"val": dash}))
+    return _ns(c)
+
+
+def tb(sl, l, t, w, h, lines, align=PP_ALIGN.LEFT, anchor=MSO_ANCHOR.TOP):
+    box = sl.shapes.add_textbox(Inches(l), Inches(t), Inches(w), Inches(h))
+    settext(box, lines, align=align, anchor=anchor)
+    return box
+
+
+def head(sl, kicker, title, accent=ORANGE):
+    tb(sl, 0.52, 0.72, 9.0, 0.26, [{"t": kicker.upper(), "s": 10.5, "c": accent, "b": True}])
+    tb(sl, 0.5, 0.98, 9.0, 0.56, [{"t": title, "s": 23, "c": INK, "b": True}])
+    rect(sl, 0.54, 1.55, 1.25, 0.05, accent, rounded=False)
+
+
+def badge(sl, cx, cy, txt, color, d=0.32):
+    o = oval(sl, cx - d / 2, cy - d / 2, d, d, color)
+    settext(o, [{"t": str(txt), "s": 11.5, "c": WHITE, "b": True, "align": PP_ALIGN.CENTER}],
+            align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
 
 
 def clear_prompts(sl):
     for sh in sl.shapes:
-        if sh.has_text_frame and sh.shape_type == 17:  # TEXT_BOX
+        if sh.has_text_frame and sh.shape_type == 17:
             sh.text_frame.clear()
 
 
-def bullet(t, s=12, c=INK, b=False, sa=4, align=PP_ALIGN.LEFT):
-    return {"t": t, "s": s, "c": c, "b": b, "sa": sa, "align": align}
-
-
 # ===============================================================================
-# SLIDE 1 — cover fields
+# SLIDE 1 — cover fields (white bottom band -> DARK text)
 for sh in S[0].shapes:
-    if sh.has_text_frame:
+    if sh.has_text_frame and sh.text_frame.text.strip():
         tx = sh.text_frame.text
         if tx.startswith("Problem Statement"):
-            settext(sh, [{"t": "Problem Statement : PS-12 — Fill in the Frames Seamlessly: Enhancing "
-                          "Temporal Resolution of Satellite Imagery using AI/ML based on Optical Flow",
-                          "s": 13, "b": True, "c": WHITE, "align": PP_ALIGN.LEFT}],
-                    align=PP_ALIGN.LEFT, anchor=MSO_ANCHOR.MIDDLE)
+            settext(sh, [{"runs": [
+                {"t": "Problem Statement:  ", "s": 13, "c": INK, "b": True},
+                {"t": "PS-12 — Fill in the Frames Seamlessly: Enhancing Temporal Resolution of Satellite "
+                      "Imagery using AI/ML based on Optical Flow", "s": 13, "c": NAVY}]}],
+                anchor=MSO_ANCHOR.MIDDLE)
         elif tx.startswith("Team Name"):
-            settext(sh, [{"t": "Team Name : [your team name]", "s": 13, "c": WHITE, "align": PP_ALIGN.LEFT}],
-                    align=PP_ALIGN.LEFT)
+            settext(sh, [{"runs": [{"t": "Team Name:  ", "s": 13, "c": INK, "b": True},
+                                   {"t": "[ your team ]", "s": 13, "c": SLATE}]}], anchor=MSO_ANCHOR.MIDDLE)
         elif tx.startswith("Team Leader"):
-            settext(sh, [{"t": "Team Leader Name : [your name]", "s": 13, "c": WHITE, "align": PP_ALIGN.LEFT}],
-                    align=PP_ALIGN.LEFT)
+            settext(sh, [{"runs": [{"t": "Team Leader:  ", "s": 13, "c": INK, "b": True},
+                                   {"t": "[ your name ]", "s": 13, "c": SLATE}]}], anchor=MSO_ANCHOR.MIDDLE)
 
 # ===============================================================================
-# SLIDE 3 — Opportunity & USP
+# SLIDE 3 — Opportunity & USP  (two clean columns, no boxes)
 sl = S[2]; clear_prompts(sl)
-title_bar(sl, "The Opportunity & Our Edge")
-card(sl, 0.35, 1.45, 4.55, 1.75, [
-    bullet("The gap", 13, BLUE, True),
-    bullet("INSAT-3DR/3DS image every 30 min. Cyclones, thunderstorms, fire fronts and floods change "
-           "in minutes — so we miss them between frames.", 11),
-    bullet("The idea (simple): teach an AI to draw the missing in-between frames from two real frames "
-           "→ 30 → 15 → 7.5 min, with no new satellite.", 11),
-], bar=BLUE)
-card(sl, 0.35, 3.3, 4.55, 1.95, [
-    bullet("How it's different", 13, PURPLE, True),
-    bullet("Classical optical flow (TV-L1) assumes straight, constant-brightness motion → it blurs & "
-           "ghosts on fast, non-linear cloud growth.", 11),
-    bullet("We LEARN the motion field + how to fuse it, directly from satellite thermal-IR.", 11),
-    bullet("Predict I(t₁) from I(t₀), I(t₂) at t = (t₁−t₀)/(t₂−t₀);  30→15 min ⇒ t = 0.5.", 11, GREY, False),
-], bar=PURPLE)
-card(sl, 5.05, 1.45, 4.6, 3.8, [
-    bullet("Unique selling points (USP)", 13, GREEN, True),
-    bullet("• Trained on satellite IR (brightness temperature) — not natural video.", 11),
-    bullet("• Cross-satellite transfer: train on dense GOES-19 / Himawari (10-min) → apply to INSAT.", 11),
-    bullet("• Self-supervised INSAT adaptation — needs NO labels (uses INSAT's own 30-min frames).", 11),
-    bullet("• Custom UNetVFI = intermediate-flow (RIFE-style) ⊕ visibility/occlusion blend "
-           "(Super-SloMo-style).", 11),
-    bullet("• Full product: .nc → .nc, a web dashboard, and a metric-validated report.", 11),
-    bullet("• Already real: trained on a Tesla T4, validated on real GOES-19 (val PSNR≈42, SSIM≈0.95).",
-           11, GREEN, True),
-], bar=GREEN)
+head(sl, "01 · Opportunity & Edge", "Minutes matter — we fill the gap")
+tb(sl, 0.55, 1.85, 4.3, 3.3, [
+    {"t": "THE GAP", "s": 11, "c": ORANGE, "b": True, "sa": 3},
+    {"t": "Geostationary INSAT-3DR/3DS image every 30 minutes. Cyclones, thunderstorms, fire fronts "
+          "and floods evolve in minutes — so the action happens between frames.", "s": 12, "c": SLATE, "sa": 10},
+    {"t": "THE IDEA", "s": 11, "c": BLUE, "b": True, "sa": 3},
+    {"t": "Teach an AI to synthesise the missing in-between frames from two real frames → 30 → 15 → "
+          "7.5 min, with no new satellite hardware.", "s": 12, "c": SLATE, "sa": 10},
+    {"t": "WHY WE'RE DIFFERENT", "s": 11, "c": VIOLET, "b": True, "sa": 3},
+    {"t": "Classical optical flow (TV-L1) assumes straight, brightness-constant motion → it blurs and "
+          "ghosts on fast, non-linear cloud growth. We learn the motion field and the fusion from the "
+          "satellite thermal-IR itself.", "s": 12, "c": SLATE},
+])
+conn(sl, 5.05, 1.95, 5.05, 5.0, HAIR, w=1.0, head=False)
+usp = [
+    "Trained on satellite IR (brightness temperature) — not natural video.",
+    "Cross-satellite transfer: learn on dense GOES-19 / Himawari (10-min) → apply to INSAT.",
+    "Self-supervised INSAT adaptation — needs NO labels (uses INSAT's own 30-min frames).",
+    "Custom UNetVFI = intermediate-flow (RIFE-style) + visibility blending (Super-SloMo-style).",
+    "Complete product: .nc → .nc, web dashboard, and a metric-validated report.",
+]
+tb(sl, 5.3, 1.85, 4.25, 0.3, [{"t": "UNIQUE ADVANTAGES", "s": 11, "c": GREEN, "b": True}])
+for i, u in enumerate(usp):
+    y = 2.2 + i * 0.5
+    oval(sl, 5.32, y + 0.05, 0.12, 0.12, GREEN)
+    tb(sl, 5.55, y - 0.05, 4.0, 0.5, [{"t": u, "s": 11.5, "c": INK}])
+rect(sl, 5.3, 4.78, 4.25, 0.42, MIST, line=HAIR, radius=0.18)
+settext(sl.shapes[-1], [{"runs": [{"t": "Already real:  ", "s": 11, "c": GREEN, "b": True},
+        {"t": "trained on a Tesla T4, validated on real GOES-19 (val PSNR ≈ 42, SSIM ≈ 0.95).",
+         "s": 11, "c": INK}]}], anchor=MSO_ANCHOR.MIDDLE)
 
 # ===============================================================================
-# SLIDE 4 — Features
+# SLIDE 4 — Features (clean 3x2 tiles, numbered, no left bars)
 sl = S[3]; clear_prompts(sl)
-title_bar(sl, "What the Solution Does")
+head(sl, "02 · Capabilities", "What the solution does", accent=BLUE)
 feats = [
-    ("5 interpolation engines", "Custom UNetVFI + RIFE + FILM + Super-SloMo + RAFT, with a classical "
+    ("Five interpolation engines", "Custom UNetVFI + RIFE + FILM + Super-SloMo + RAFT, with a classical "
      "TV-L1 baseline for honest comparison.", BLUE),
     ("Temporal upscaling", "2× (30→15) and 4× (30→7.5 min) by recursively inserting AI frames.", TEAL),
-    ("Standards-compliant I/O", "Reads .nc/.h5 (GOES/Himawari/INSAT), writes CF NetCDF brightness "
-     "temperature (the PS contract).", PURPLE),
-    ("Validation vs ground truth", "PSNR, SSIM, FSIM, MSE, MAE(K), LPIPS + cloud-motion metrics "
+    ("Standards I/O", "Reads .nc/.h5 (GOES / Himawari / INSAT), writes CF NetCDF brightness "
+     "temperature — the PS contract.", VIOLET),
+    ("Validated vs ground truth", "PSNR · SSIM · FSIM · MSE · MAE(K) · LPIPS + cloud-motion metrics "
      "(flow-EPE, edge-SSIM, temporal warping).", ORANGE),
-    ("Web dashboard (3 tabs)", "Interpolate · Temporal Upscaling · Validation Report — animations, "
-     "motion-vector overlay, live metrics.", GREEN),
+    ("Web dashboard", "Three tabs — Interpolate · Temporal Upscaling · Validation Report — with "
+     "animations, motion overlay, live metrics.", GREEN),
     ("Cloud-ready", "One command connects to a free T4 (Lightning.ai / Colab / Kaggle) with 100 GB "
-     "persistent storage.", RED),
+     "persistent storage.", NAVY),
 ]
-xs = [0.35, 3.45, 6.55]; ys = [1.45, 3.05]
-for k, (h, b, col) in enumerate(feats):
+xs = [0.55, 3.72, 6.89]; ys = [1.85, 3.32]; w, h = 2.95, 1.32
+for k, (t_, b_, col) in enumerate(feats):
     x = xs[k % 3]; y = ys[k // 3]
-    card(sl, x, y, 2.95, 1.45, [bullet(h, 12, col, True), bullet(b, 10.5)], bar=col)
-textbox(sl, 0.35, 4.7, 9.3, 0.6, [
-    {"t": "Math: PSNR = 10·log₁₀(1 / MSE) → a perfect frame (MSE 0) ⇒ PSNR ∞.  "
-          "Our UNetVFI reached val PSNR ≈ 42 dB, SSIM ≈ 0.95 on held-out GOES.", "s": 11, "i": True, "c": INK}])
+    rect(sl, x, y, w, h, WHITE, line=HAIR, radius=0.08)
+    badge(sl, x + 0.32, y + 0.32, k + 1, col, d=0.34)
+    tb(sl, x + 0.58, y + 0.12, w - 0.7, 0.4, [{"t": t_, "s": 12.5, "c": INK, "b": True}])
+    tb(sl, x + 0.18, y + 0.55, w - 0.34, 0.72, [{"t": b_, "s": 10.3, "c": SLATE}])
+rect(sl, 0.55, 4.85, 9.0, 0.42, NAVY, radius=0.2)
+settext(sl.shapes[-1], [{"runs": [
+    {"t": "Metric  ", "s": 11, "c": ORANGE, "b": True},
+    {"t": "PSNR = 10·log₁₀(1 / MSE)  →  perfect frame → PSNR infinite.   Our UNetVFI reached val PSNR ≈ 42 dB, "
+          "SSIM ≈ 0.95 on held-out GOES.", "s": 11, "c": WHITE}]}], anchor=MSO_ANCHOR.MIDDLE)
 
 # ===============================================================================
-# SLIDE 5 — Process flow  (colourful pipeline)
+# SLIDE 5 — Process flow (clean stages + thin arrowed connectors + equation)
 sl = S[4]; clear_prompts(sl)
-title_bar(sl, "Process Flow")
+head(sl, "03 · How it works", "Process flow", accent=TEAL)
 stages = [
-    (BLUE,  "1 · INPUT", ["Two real frames", "I(t₀), I(t₂)", ".nc / .h5  ·  TIR ~10 µm"]),
-    (TEAL,  "2 · PREP", ["Calibrate → BT (K)", "Normalize [180–330K]→[0,1]", "Tile 256²"]),
-    (PURPLE, "3 · AI OPTICAL FLOW", ["Estimate motion +", "synthesize I(t)", "t = ½, ¼, ¾"]),
-    (GREEN, "4 · REBUILD", ["Untile (feather-blend)", "Denormalize → BT", "Write .nc @ new time"]),
-    (ORANGE, "5 · VALIDATE & SHOW", ["PSNR/SSIM/FSIM…", "Web dashboard", "time-lapse animation"]),
+    (BLUE, "INPUT", ["Two real frames", "I(t₀), I(t₂)", ".nc / .h5 · TIR ~10µm"]),
+    (TEAL, "PREP", ["Calibrate → BT (K)", "Normalize → [0,1]", "Tile 256²"]),
+    (VIOLET, "AI OPTICAL FLOW", ["Estimate motion", "+ synthesise I(t)", "t = ½, ¼, ¾"]),
+    (GREEN, "REBUILD", ["Untile (feather)", "Denormalize → BT", "Write .nc @ new t"]),
+    (ORANGE, "VALIDATE & SHOW", ["PSNR/SSIM/FSIM", "web dashboard", "time-lapse"]),
 ]
-w, gap, y, h = 1.66, 0.18, 1.7, 2.0
-x = 0.32
-for i, (col, head, lines) in enumerate(stages):
-    b = box(sl, x, y, w, h, col)
-    runs = [{"t": head, "s": 11.5, "b": True, "c": WHITE, "sa": 4}]
-    runs += [{"t": ln, "s": 10, "c": WHITE, "sa": 1} for ln in lines]
-    settext(b, runs, align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
+w, gap, y, h = 1.55, 0.31, 2.05, 1.75
+x = 0.55
+for i, (col, hd, lines) in enumerate(stages):
+    rect(sl, x, y, w, h, WHITE, line=HAIR, radius=0.09)
+    rect(sl, x, y, w, 0.07, col, rounded=False)
+    badge(sl, x + 0.3, y + 0.4, i + 1, col, d=0.3)
+    tb(sl, x + 0.5, y + 0.22, w - 0.55, 0.34, [{"t": hd, "s": 10.5, "c": col, "b": True}])
+    tb(sl, x + 0.15, y + 0.7, w - 0.3, 1.0,
+       [{"t": ln, "s": 9.8, "c": SLATE, "sa": 2} for ln in lines])
     if i < len(stages) - 1:
-        arrow(sl, x + w + 0.005, y + h / 2 - 0.16, gap - 0.01, 0.32, GREY)
+        conn(sl, x + w + 0.04, y + h / 2, x + w + gap - 0.04, y + h / 2, INK, w=1.4)
     x += w + gap
-box(sl, 0.32, 4.0, 9.36, 0.95, LIGHT, line=RGBColor(0xCF, 0xD8, 0xE0))
-textbox(sl, 0.5, 4.08, 9.0, 0.8, [
-    {"t": "Synthesis equation (per pixel x):", "s": 11, "b": True, "c": NAVY},
-    {"t": "I_t(x) ≈ M(x)·I₀(x + F_{t→0}(x))  +  (1 − M(x))·I₂(x + F_{t→1}(x))", "s": 13, "b": True, "c": PURPLE},
-    {"t": "F = learned optical flow (motion vectors),  M = learned visibility/occlusion mask.", "s": 10.5,
-     "i": True, "c": GREY}], align=PP_ALIGN.LEFT)
+rect(sl, 0.55, 4.1, 9.0, 1.05, MIST, line=HAIR, radius=0.06)
+tb(sl, 0.8, 4.18, 8.6, 0.9, [
+    {"t": "Synthesis equation (per pixel x)", "s": 10.5, "c": TEAL, "b": True, "sa": 3},
+    {"t": "I_t(x) ≈ M(x) · I₀(x + F_{t→0}(x))   +   (1 − M(x)) · I₂(x + F_{t→1}(x))", "s": 15, "c": INK,
+     "b": True, "sa": 3},
+    {"t": "F = learned optical flow (motion vectors) · M = learned visibility / occlusion mask · "
+          "t = (t₁−t₀)/(t₂−t₀);  for 30→15 min,  t = 0.5", "s": 10, "c": SLATE, "i": True}])
 
 # ===============================================================================
-# SLIDE 6 — Dashboard wireframe
+# SLIDE 6 — realistic dashboard mock
 sl = S[5]; clear_prompts(sl)
-title_bar(sl, "Dashboard (Web GUI)")
-# browser frame
-box(sl, 0.5, 1.5, 9.0, 3.7, RGBColor(0xF7, 0xF9, 0xFB), line=RGBColor(0xC2, 0xCD, 0xD6))
-box(sl, 0.5, 1.5, 9.0, 0.4, NAVY)
-settext(box(sl, 0.5, 1.5, 9.0, 0.4, NAVY), [{"t": "🛰  PS-12  ·  Satellite Frame Interpolation", "s": 11,
-        "b": True, "c": WHITE, "align": PP_ALIGN.LEFT}], align=PP_ALIGN.LEFT)
+head(sl, "04 · Visualisation", "Web dashboard (GUI)", accent=ORANGE)
+
+
+def irframe(sl, l, t, w, h, accent=None, tag=None):
+    rect(sl, l, t, w, h, IRBG, line=(accent or RGBColor(0x39, 0x44, 0x55)), lw=(1.75 if accent else 0.75), radius=0.05)
+    blobs = [(0.12, 0.30, 0.42, 0.34, RGBColor(0xDD, 0xE4, 0xEC)),
+             (0.40, 0.12, 0.34, 0.30, RGBColor(0xAF, 0xBC, 0xCB)),
+             (0.55, 0.50, 0.40, 0.40, RGBColor(0xC7, 0xD1, 0xDC)),
+             (0.20, 0.62, 0.26, 0.26, RGBColor(0x93, 0xA2, 0xB4))]
+    for bx, by, bw, bh, col in blobs:
+        oval(sl, l + bx * w, t + by * h, bw * w, bh * h, col)
+    if tag:
+        rect(sl, l + 0.04, t + 0.04, 0.5, 0.2, (accent or RGBColor(0x39, 0x44, 0x55)), rounded=False)
+        settext(sl.shapes[-1], [{"t": tag, "s": 8, "c": WHITE, "b": True, "align": PP_ALIGN.CENTER}],
+                align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
+
+
+# window
+rect(sl, 0.55, 1.8, 9.0, 3.35, WHITE, line=RGBColor(0xC9, 0xD3, 0xDE), lw=1.0, radius=0.03)
+rect(sl, 0.55, 1.8, 9.0, 0.34, NAVY, radius=0.03)
+for i, c in enumerate([RGBColor(0xF2, 0x6A, 0x1B), GREEN, BLUE]):
+    oval(sl, 0.72 + i * 0.17, 1.9, 0.11, 0.11, c)
+tb(sl, 1.4, 1.83, 7.0, 0.28, [{"t": "PS-12 · Satellite Frame Interpolation          localhost:8501",
+                               "s": 9.5, "c": WHITE, "b": True}], anchor=MSO_ANCHOR.MIDDLE)
 # sidebar
-sb = box(sl, 0.65, 2.05, 2.0, 3.0, LIGHT, line=RGBColor(0xC2, 0xCD, 0xD6))
-settext(sb, [bullet("Configuration", 11, NAVY, True),
-             bullet("Source ▾", 10, INK), bullet("Model ▾  (UNetVFI…)", 10, INK),
-             bullet("Factor: 2× / 4×", 10, INK), bullet("☑ motion overlay", 10, INK),
-             bullet("● runnable: unet, raft,", 9.5, GREEN), bullet("  classical", 9.5, GREEN)],
-        align=PP_ALIGN.LEFT, anchor=MSO_ANCHOR.TOP)
+rect(sl, 0.72, 2.3, 1.95, 2.7, MIST, line=HAIR, radius=0.05)
+tb(sl, 0.85, 2.4, 1.75, 2.5, [
+    {"t": "CONFIGURATION", "s": 9, "c": SLATE, "b": True, "sa": 6},
+    {"t": "Source:    GOES-19", "s": 9.5, "c": INK, "sa": 6},
+    {"t": "Model:     UNetVFI", "s": 9.5, "c": INK, "sa": 6},
+    {"t": "Factor:    2× | 4×", "s": 9.5, "c": INK, "sa": 6},
+    {"t": "Motion overlay:  ON", "s": 9.5, "c": INK, "sa": 8},
+    {"t": "RUNNABLE", "s": 9, "c": SLATE, "b": True, "sa": 4},
+    {"t": "● unet   ● raft   ● classical", "s": 9, "c": GREEN, "b": True}])
 # tabs
-for i, (lab, c) in enumerate([("▶ Interpolate", BLUE), ("🔼 Temporal Upscaling", TEAL),
-                              ("📊 Validation Report", ORANGE)]):
-    settext(box(sl, 2.8 + i * 2.2, 2.05, 2.1, 0.35, c), [{"t": lab, "s": 9.5, "b": True, "c": WHITE}])
+for i, (lab, c, on) in enumerate([("Interpolate", BLUE, True), ("Temporal Upscaling", TEAL, False),
+                                  ("Validation Report", ORANGE, False)]):
+    rect(sl, 2.85 + i * 1.9, 2.34, 1.78, 0.32, c if on else WHITE, line=(None if on else HAIR), radius=0.2)
+    settext(sl.shapes[-1], [{"t": lab, "s": 9.5, "c": (WHITE if on else SLATE), "b": True,
+            "align": PP_ALIGN.CENTER}], align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
 # frame strip
-labels = [("t₀ (input)", GREY), ("t=0.5 (AI)", PURPLE), ("t₂ (input)", GREY)]
-for i, (lab, c) in enumerate(labels):
-    box(sl, 2.85 + i * 1.7, 2.6, 1.5, 1.35, RGBColor(0x33, 0x3A, 0x44))
-    settext(box(sl, 2.85 + i * 1.7, 3.98, 1.5, 0.28, c), [{"t": lab, "s": 9.5, "b": True, "c": WHITE}])
-# metrics strip
-for i, (lab, val) in enumerate([("PSNR", "33.5"), ("SSIM", "0.89"), ("FSIM", "0.99"), ("MAE(K)", "1.7")]):
-    box(sl, 2.85 + i * 1.55, 4.45, 1.4, 0.55, RGBColor(0xEA, 0xF1, 0xF6), line=RGBColor(0xC2, 0xCD, 0xD6))
-    settext(sl.shapes[-1], [{"t": val, "s": 13, "b": True, "c": NAVY}, {"t": lab, "s": 8.5, "c": GREY}])
-textbox(sl, 0.5, 5.18, 9.0, 0.35, [{"t": "Served from the cloud T4 → opened in your browser (Lightning "
-        "Streamlit plugin / ngrok). Validation tab shows committed comparison results.", "s": 10, "i": True,
-        "c": GREY}])
+fr = [("t₀  input", None), ("t = 0.5  AI", BLUE), ("t₂  input", None)]
+for i, (lab, ac) in enumerate(fr):
+    fx = 2.9 + i * 2.18
+    irframe(sl, fx, 2.78, 2.0, 1.32, accent=ac, tag=("AI" if ac else None))
+    tb(sl, fx, 4.12, 2.0, 0.24, [{"t": lab, "s": 9, "c": (BLUE if ac else SLATE), "b": bool(ac),
+                                  "align": PP_ALIGN.CENTER}], align=PP_ALIGN.CENTER)
+    if i < 2:
+        conn(sl, fx + 2.0, 3.44, fx + 2.18, 3.44, MUTE, w=1.2)
+# metric chips
+for i, (lab, val, c) in enumerate([("PSNR", "33.5", BLUE), ("SSIM", "0.89", TEAL), ("FSIM", "0.99", VIOLET),
+                                   ("MAE(K)", "1.7", ORANGE)]):
+    cx = 2.9 + i * 1.62
+    rect(sl, cx, 4.45, 1.5, 0.5, WHITE, line=HAIR, radius=0.12)
+    settext(sl.shapes[-1], [{"t": val, "s": 13, "c": c, "b": True, "sa": 0, "align": PP_ALIGN.CENTER},
+            {"t": lab, "s": 8, "c": SLATE, "align": PP_ALIGN.CENTER}], align=PP_ALIGN.CENTER,
+            anchor=MSO_ANCHOR.MIDDLE)
+tb(sl, 0.55, 5.18, 9.0, 0.3, [{"t": "Served from the cloud T4 → opened in your browser (Lightning "
+        "Streamlit plugin / ngrok). Validation tab renders committed comparison results.", "s": 9.5,
+        "c": MUTE, "i": True}])
 
 # ===============================================================================
-# SLIDE 7 — Architecture (custom UNetVFI)
+# SLIDE 7 — Architecture (research-paper U-Net)
 sl = S[6]; clear_prompts(sl)
-title_bar(sl, "Architecture — Custom UNetVFI")
-# inputs
-box(sl, 0.3, 1.95, 0.95, 0.55, BLUE); settext(sl.shapes[-1], [{"t": "I₀", "s": 13, "b": True, "c": WHITE}])
-box(sl, 0.3, 2.75, 0.95, 0.55, BLUE); settext(sl.shapes[-1], [{"t": "I₂", "s": 13, "b": True, "c": WHITE}])
-box(sl, 1.4, 2.2, 0.8, 0.9, NAVY); settext(sl.shapes[-1], [{"t": "concat", "s": 10, "b": True, "c": WHITE},
-                                                          {"t": "2 ch", "s": 9, "c": WHITE}])
-arrow(sl, 1.25, 2.4, 0.13, 0.5, GREY); arrow(sl, 2.2, 2.4, 0.13, 0.5, GREY)
-# encoder (down) and decoder (up) columns
-enc = [("32", TEAL), ("64", TEAL), ("128", TEAL), ("256", PURPLE)]
-dec = [("128", GREEN), ("64", GREEN), ("32", GREEN)]
-ex = 2.45
-for i, (lab, c) in enumerate(enc):
-    yy = 1.7 + i * 0.62
-    box(sl, ex, yy, 0.95, 0.5, c); settext(sl.shapes[-1], [{"t": "enc " + lab, "s": 10, "b": True, "c": WHITE}])
-# bottleneck arrow to decoder
-dx = 3.95
-for i, (lab, c) in enumerate(dec):
-    yy = 2.0 + (len(dec) - 1 - i) * 0.62
-    box(sl, dx, yy, 0.95, 0.5, c); settext(sl.shapes[-1], [{"t": "dec " + lab, "s": 10, "b": True, "c": WHITE}])
-    # skip-connection arrow enc->dec (dashed look via thin grey arrow)
-    arrow(sl, ex + 0.97, 1.7 + i * 0.62 + 0.12, dx - (ex + 0.97), 0.18, RGBColor(0xB7, 0xC2, 0xCC))
-textbox(sl, 2.4, 4.18, 2.6, 0.3, [{"t": "U-Net encoder ↘ / decoder ↗  + skip connections", "s": 9.5,
-        "i": True, "c": GREY}])
+head(sl, "05 · Architecture", "Custom UNetVFI — flow + visibility", accent=VIOLET)
+
+
+def fmap(sl, cx, cyc, h, ch, fill, res):
+    w = 0.5
+    rect(sl, cx - w / 2, cyc - h / 2, w, h, fill, line=RGBColor(0x2A, 0x3A, 0x55), lw=0.5, rounded=False)
+    tb(sl, cx - 0.45, cyc + h / 2 + 0.02, 0.9, 0.2, [{"t": ch, "s": 8.5, "c": INK, "b": True,
+       "align": PP_ALIGN.CENTER}], align=PP_ALIGN.CENTER)
+    tb(sl, cx - 0.45, cyc - h / 2 - 0.22, 0.9, 0.18, [{"t": res, "s": 7.5, "c": MUTE,
+       "align": PP_ALIGN.CENTER}], align=PP_ALIGN.CENTER)
+
+
+cy = 3.0
+# inputs + concat
+irframe(sl, 0.55, 2.45, 0.62, 0.5)
+tb(sl, 0.55, 2.96, 0.62, 0.18, [{"t": "I₀", "s": 9, "c": INK, "b": True, "align": PP_ALIGN.CENTER}], align=PP_ALIGN.CENTER)
+irframe(sl, 0.55, 3.15, 0.62, 0.5)
+tb(sl, 0.55, 3.66, 0.62, 0.18, [{"t": "I₂", "s": 9, "c": INK, "b": True, "align": PP_ALIGN.CENTER}], align=PP_ALIGN.CENTER)
+rect(sl, 1.3, 2.72, 0.58, 0.66, NAVY, radius=0.12)
+settext(sl.shapes[-1], [{"t": "concat", "s": 8.5, "c": WHITE, "b": True, "align": PP_ALIGN.CENTER}], align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
+conn(sl, 1.17, 2.7, 1.34, 2.9, MUTE, w=1.0); conn(sl, 1.17, 3.4, 1.34, 3.2, MUTE, w=1.0)
+# encoder (down-step) E1..E4
+encx = [2.15, 2.9, 3.65, 4.4]; ench = [1.5, 1.15, 0.85, 0.6]
+encmeta = [("32", "256²"), ("64", "128²"), ("128", "64²"), ("256", "32²")]
+for i, ex in enumerate(encx):
+    fmap(sl, ex, cy, ench[i], encmeta[i][0], ENC[i], encmeta[i][1])
+conn(sl, 1.85, 3.05, encx[0] - 0.27, 3.0, INK, w=1.3)
+for i in range(3):
+    conn(sl, encx[i] + 0.27, cy, encx[i + 1] - 0.27, cy, INK, w=1.3)
+# decoder (up-step) D3..D1
+decx = [5.25, 6.0, 6.75]; dech = [0.85, 1.15, 1.5]
+decmeta = [("128", "64²"), ("64", "128²"), ("32", "256²")]
+for i, dx in enumerate(decx):
+    fmap(sl, dx, cy, dech[i], decmeta[i][0], DEC[i], decmeta[i][1])
+conn(sl, encx[3] + 0.27, cy, decx[0] - 0.27, cy, INK, w=1.3)
+for i in range(2):
+    conn(sl, decx[i] + 0.27, cy, decx[i + 1] - 0.27, cy, INK, w=1.3)
+# skip connections (staggered staples over the top, dashed)
+skips = [(encx[0], decx[2], 1.78), (encx[1], decx[1], 1.92), (encx[2], decx[0], 2.06)]
+for ex, dx, ytop in skips:
+    conn(sl, ex, cy - ench[encx.index(ex)] / 2, ex, ytop, MUTE, w=0.9, head=False, dash="dash")
+    conn(sl, ex, ytop, dx, ytop, MUTE, w=0.9, head=False, dash="dash")
+    conn(sl, dx, ytop, dx, cy - dech[decx.index(dx)] / 2, MUTE, w=0.9, dash="dash")
+tb(sl, 4.3, 1.6, 2.0, 0.2, [{"t": "skip connections", "s": 8.5, "c": MUTE, "i": True, "align": PP_ALIGN.CENTER}], align=PP_ALIGN.CENTER)
 # head -> flow + mask
-arrow(sl, 4.92, 2.4, 0.18, 0.5, GREY)
-hx = 5.2
-for i, (lab, c, sub) in enumerate([("flow_{t→0}", ORANGE, "2 ch"), ("flow_{t→1}", ORANGE, "2 ch"),
-                                   ("mask M", GOLD, "1 ch, σ")]):
-    box(sl, hx, 1.75 + i * 0.78, 1.55, 0.62, c)
-    settext(sl.shapes[-1], [{"t": lab, "s": 10.5, "b": True, "c": WHITE}, {"t": sub, "s": 8.5, "c": WHITE}])
-# warp + blend
-arrow(sl, 6.78, 2.4, 0.18, 0.5, GREY)
-box(sl, 7.0, 1.95, 1.45, 1.4, NAVY)
-settext(sl.shapes[-1], [{"t": "backward-warp", "s": 10, "b": True, "c": WHITE},
-                        {"t": "I₀, I₂ by F", "s": 9.5, "c": WHITE},
-                        {"t": "blend by M", "s": 9.5, "c": WHITE}])
-arrow(sl, 8.45, 2.5, 0.2, 0.3, GREEN)
-box(sl, 8.7, 1.95, 1.0, 1.4, GREEN)
-settext(sl.shapes[-1], [{"t": "I(t)", "s": 14, "b": True, "c": WHITE}, {"t": "synthetic", "s": 9, "c": WHITE},
-                        {"t": "frame", "s": 9, "c": WHITE}])
-# caption + system strip
-box(sl, 0.3, 4.55, 9.4, 0.95, LIGHT, line=RGBColor(0xCF, 0xD8, 0xE0))
-textbox(sl, 0.45, 4.6, 9.1, 0.9, [
-    {"t": "RIFE-style intermediate flow ⊕ Super-SloMo visibility blending · ~2–5 M params · trains "
-          "from scratch on GOES/Himawari in hours on a T4 · self-supervised on INSAT.", "s": 10.5, "c": INK},
-    {"t": "System: Local dev  →  GitHub  →  Lightning.ai T4 (train + infer, 100 GB persist)  →  "
-          "Streamlit dashboard (browser).", "s": 10.5, "b": True, "c": NAVY}], align=PP_ALIGN.LEFT)
+conn(sl, decx[2] + 0.27, cy, 7.25, cy, INK, w=1.3)
+for i, (lab, c, sub) in enumerate([("flow t→0", ORANGE, "2ch"), ("flow t→1", ORANGE, "2ch"), ("mask M", RGBColor(0xD4, 0xA0, 0x17), "1ch σ")]):
+    rect(sl, 7.3, 2.05 + i * 0.66, 1.25, 0.56, c, radius=0.14)
+    settext(sl.shapes[-1], [{"t": lab, "s": 9.5, "c": WHITE, "b": True, "sa": 0, "align": PP_ALIGN.CENTER},
+            {"t": sub, "s": 7.5, "c": WHITE, "align": PP_ALIGN.CENTER}], align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
+conn(sl, 8.55, 2.9, 8.75, 2.9, INK, w=1.3)
+rect(sl, 8.78, 2.5, 0.95, 0.85, NAVY, radius=0.1)
+settext(sl.shapes[-1], [{"t": "warp", "s": 9.5, "c": WHITE, "b": True, "sa": 0, "align": PP_ALIGN.CENTER},
+        {"t": "+ blend", "s": 9, "c": WHITE, "align": PP_ALIGN.CENTER}], align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
+irframe(sl, 8.95, 3.5, 0.62, 0.5, accent=GREEN)
+tb(sl, 8.75, 4.0, 1.0, 0.2, [{"t": "I(t)", "s": 10, "c": GREEN, "b": True, "align": PP_ALIGN.CENTER}], align=PP_ALIGN.CENTER)
+conn(sl, 9.25, 3.35, 9.25, 3.48, GREEN, w=1.3)
+# caption strip
+rect(sl, 0.55, 4.55, 9.0, 0.7, MIST, line=HAIR, radius=0.08)
+tb(sl, 0.75, 4.6, 8.7, 0.65, [
+    {"runs": [{"t": "RIFE-style intermediate flow + Super-SloMo visibility blending", "s": 10.5, "c": INK, "b": True},
+              {"t": "  ·  ~2–5M params  ·  trains from scratch on GOES/Himawari in hours on a T4  ·  "
+                    "self-supervised on INSAT.", "s": 10.5, "c": SLATE}]},
+    {"runs": [{"t": "System:  ", "s": 10, "c": VIOLET, "b": True},
+              {"t": "Local dev → GitHub → Lightning.ai T4 (train + infer, 100 GB persist) → Streamlit "
+                    "dashboard in your browser.", "s": 10, "c": SLATE}]}])
 
 # ===============================================================================
-# SLIDE 8 — Technologies
+# SLIDE 8 — Technologies (clean rows, colored dot, no bars)
 sl = S[7]; clear_prompts(sl)
-title_bar(sl, "Technology Stack")
+head(sl, "06 · Stack", "Technologies used", accent=BLUE)
 groups = [
     ("Deep learning", BLUE, "PyTorch · RAFT (torchvision) · RIFE · FILM · Super-SloMo · custom UNetVFI"),
-    ("Satellite I/O", TEAL, "xarray · netCDF4 · h5py · satpy · boto3 (GOES S3) · paramiko/lftp (MOSDAC SFTP)"),
-    ("Classical + metrics", PURPLE, "OpenCV TV-L1/Farnebäck · scikit-image · piq (FSIM/LPIPS)"),
+    ("Satellite I/O", TEAL, "xarray · netCDF4 · h5py · satpy · boto3 (GOES S3) · paramiko / lftp (MOSDAC SFTP)"),
+    ("Classical + metrics", VIOLET, "OpenCV TV-L1 / Farnebäck · scikit-image · piq (FSIM / LPIPS)"),
     ("Web + serving", ORANGE, "Streamlit (3-tab dashboard) · ngrok / Lightning Streamlit plugin"),
     ("Compute + DevOps", GREEN, "Lightning.ai / Colab / Kaggle free T4 + 100 GB persist · Git / GitHub"),
-    ("Datasets", RED, "GOES-19 ABI Ch13 (10.3µm) · Himawari AHI B13 (10.4µm) · INSAT-3DR/3DS TIR1 (10.8µm)"),
+    ("Datasets", NAVY, "GOES-19 ABI Ch13 (10.3µm) · Himawari AHI B13 (10.4µm) · INSAT-3DR/3DS TIR1 (10.8µm)"),
 ]
-y = 1.5
-for h, c, b in groups:
-    card(sl, 0.4, y, 9.2, 0.58, [{"t": h + ":  ", "s": 12.5, "b": True, "c": c},
-                                 {"t": b, "s": 11.5, "c": INK}], bar=c)
-    # put header+body on one wrapped line
-    sl.shapes[-1].text_frame.paragraphs[0].runs  # noop
-    y += 0.62
+y = 1.85
+for name, col, items in groups:
+    oval(sl, 0.6, y + 0.13, 0.16, 0.16, col)
+    tb(sl, 0.9, y, 8.6, 0.46, [{"runs": [{"t": name + "   ", "s": 13, "c": col, "b": True},
+                                         {"t": items, "s": 12, "c": INK}]}])
+    if y < 4.5:
+        rect(sl, 0.9, y + 0.5, 8.6, 0.012, HAIR, rounded=False)
+    y += 0.56
 
 # ===============================================================================
 # SLIDE 9 — Cost
 sl = S[8]; clear_prompts(sl)
-title_bar(sl, "Estimated Cost")
-card(sl, 0.4, 1.5, 5.6, 3.4, [
-    bullet("Software", 13, BLUE, True), bullet("₹0 — fully open-source.", 11),
-    bullet("Data", 13, TEAL, True),
-    bullet("₹0 — NOAA GOES/Himawari on AWS (free); INSAT via MOSDAC (free account).", 11),
-    bullet("Compute", 13, GREEN, True),
-    bullet("Free tiers cover it — Lightning.ai (~35 T4-hrs/mo), Colab/Kaggle free T4.", 11),
-    bullet("If paid: training ≈ 2–5 T4-GPU-hours.", 11),
-    bullet("Optional OpenAI (report narrative): < $10 (not required).", 11),
-], bar=GREEN)
-card(sl, 6.2, 1.5, 3.4, 3.4, [
-    bullet("Bottom line", 13, ORANGE, True),
-    bullet("₹0 on free tiers.", 14, GREEN, True),
-    bullet("Worst case ≤ $10.", 12, INK),
-    bullet("Cost model:", 11, NAVY, True),
-    bullet("cost ≈ GPU-hrs × $/hr", 11, INK),
-    bullet("≈ 5 × $0.35 ≈ $1.75 per", 11, INK),
-    bullet("full training run.", 11, INK),
-], bar=ORANGE)
+head(sl, "07 · Feasibility", "Estimated cost", accent=GREEN)
+rect(sl, 0.55, 1.95, 3.0, 2.9, NAVY, radius=0.06)
+settext(sl.shapes[-1], [
+    {"t": "₹0", "s": 46, "c": WHITE, "b": True, "sa": 2, "align": PP_ALIGN.CENTER},
+    {"t": "on free tiers", "s": 13, "c": RGBColor(0xBE, 0xD3, 0xE6), "sa": 8, "align": PP_ALIGN.CENTER},
+    {"t": "≤ $10 worst case", "s": 12, "c": ORANGE, "b": True, "align": PP_ALIGN.CENTER}],
+    anchor=MSO_ANCHOR.MIDDLE)
+items = [("Software", "Fully open-source.", BLUE),
+         ("Data", "NOAA GOES / Himawari on AWS (free); INSAT via MOSDAC (free account).", TEAL),
+         ("Compute", "Free T4 — Lightning.ai (~35 hrs/mo), Colab, Kaggle.", GREEN),
+         ("If paid", "Training ≈ 2–5 T4-GPU-hours.", VIOLET),
+         ("Optional", "OpenAI report narrative < $10 (not required).", ORANGE)]
+y = 1.95
+for n, d, c in items:
+    rect(sl, 3.85, y, 5.7, 0.5, MIST, line=HAIR, radius=0.12)
+    settext(sl.shapes[-1], [{"runs": [{"t": n + ":  ", "s": 11.5, "c": c, "b": True},
+            {"t": d, "s": 11.5, "c": INK}]}], anchor=MSO_ANCHOR.MIDDLE)
+    y += 0.58
+tb(sl, 3.85, 4.85, 5.7, 0.3, [{"runs": [{"t": "Cost model:  ", "s": 11, "c": GREEN, "b": True},
+        {"t": "cost ≈ GPU-hrs × $/hr ≈ 5 × $0.35 ≈ $1.75 per full training run.", "s": 11, "c": SLATE, "i": True}]}])
 
 # ===============================================================================
-# SLIDE 10 — closing
+# SLIDE 10 — Outcomes (NO "thank you")
 sl = S[9]
-box(sl, 1.2, 1.5, 7.6, 2.6, NAVY)
-settext(sl.shapes[-1], [
-    {"t": "Thank You", "s": 30, "b": True, "c": WHITE, "sa": 8},
-    {"t": "Enhancing temporal resolution — no new satellite required.", "s": 14, "c": RGBColor(0xCF, 0xE0, 0xF0)},
-    {"t": "Live & reproducible: trained on a real Tesla T4, validated on real GOES-19.", "s": 12,
-     "c": RGBColor(0xBE, 0xD3, 0xE6)},
-])
-textbox(sl, 1.2, 4.3, 7.6, 0.5, [{"t": "Repository:  github.com/uditsenapaty/ps12", "s": 14, "b": True,
-        "c": ORANGE, "align": PP_ALIGN.CENTER}], align=PP_ALIGN.CENTER)
+tb(sl, 0.52, 0.72, 9.0, 0.26, [{"t": "OUTCOMES", "s": 10.5, "c": ORANGE, "b": True}])
+tb(sl, 0.5, 0.98, 9.0, 0.56, [{"t": "Validated, reproducible, and ready", "s": 23, "c": INK, "b": True}])
+rect(sl, 0.54, 1.55, 1.25, 0.05, ORANGE, rounded=False)
+outs = [
+    ("Real GPU run", "Trained on a Tesla T4; deterministic battery 16/16 green.", BLUE),
+    ("Measured quality", "UNetVFI val PSNR ≈ 42 / SSIM ≈ 0.95; full classical / RAFT / UNet comparison.", TEAL),
+    ("End-to-end", ".nc → .nc interpolation + 30→15→7.5 min upscaling + web dashboard.", VIOLET),
+    ("Open & free", "Open-source backbones, free-tier T4, datasets at ₹0.", GREEN),
+]
+for i, (t_, d_, c) in enumerate(outs):
+    x = 0.55 + (i % 2) * 4.62; y = 1.85 + (i // 2) * 1.35
+    rect(sl, x, y, 4.42, 1.18, WHITE, line=HAIR, radius=0.08)
+    rect(sl, x, y, 0.09, 1.18, c, rounded=False) if False else None  # (intentionally no left bar)
+    oval(sl, x + 0.22, y + 0.22, 0.18, 0.18, c)
+    tb(sl, x + 0.55, y + 0.14, 3.7, 0.4, [{"t": t_, "s": 13.5, "c": INK, "b": True}])
+    tb(sl, x + 0.25, y + 0.58, 4.0, 0.55, [{"t": d_, "s": 11, "c": SLATE}])
+rect(sl, 0.55, 4.75, 9.0, 0.5, NAVY, radius=0.18)
+settext(sl.shapes[-1], [{"runs": [
+    {"t": "Repository   ", "s": 12, "c": ORANGE, "b": True},
+    {"t": "github.com/uditsenapaty/ps12", "s": 13, "c": WHITE, "b": True},
+    {"t": "      Enhancing temporal resolution — no new satellite required.", "s": 11, "c": RGBColor(0xC6, 0xD6, 0xE8), "i": True}]}],
+    anchor=MSO_ANCHOR.MIDDLE)
 
 OUT = r"D:\Udit\gitclones\ps12\ISRO_BAH_2026_PS12 - FILLED.pptx"
 prs.save(OUT)

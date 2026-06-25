@@ -53,3 +53,7 @@ Thumbs.db
 
 # generated/heavy decks (regenerate via scripts/build_ppt.py)
 *.pptx
+
+# ppt preview/render scratch
+_preview/
+_tpl_media/
