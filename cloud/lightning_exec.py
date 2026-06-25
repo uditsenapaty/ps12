@@ -84,6 +84,21 @@ def main():
     args = sys.argv[1:]
     if "--whoami" in args:
         whoami(); return
+    if "--pull" in args:
+        paths = [a for a in args if not a.startswith("--")]
+        remote, local = paths[0], paths[1]
+        from pathlib import Path as _P
+        _P(local).mkdir(parents=True, exist_ok=True)
+        studio = get_studio()
+        for meth in ("download_folder", "download", "download_file"):
+            fn = getattr(studio, meth, None)
+            if fn:
+                try:
+                    fn(remote, local)
+                    print(f"pulled {remote} -> {local} via {meth}()"); return
+                except Exception as e:
+                    print(f"{meth}() failed: {e}")
+        print("no working download method on Studio"); return
     do_start = "--start" in args
     do_stop = "--stop" in args
     cmd = " ".join(a for a in args if not a.startswith("--")).strip()
