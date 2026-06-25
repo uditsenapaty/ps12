@@ -27,6 +27,19 @@ def _ds(a: np.ndarray, k: int = 4) -> np.ndarray:
     return a[::k, ::k]
 
 
+def _api_message(e) -> str:
+    """Human-readable message out of a Lightning ApiException (its .body is JSON), else str(e)."""
+    body = getattr(e, "body", None)
+    if body:
+        try:
+            if isinstance(body, (bytes, bytearray)):
+                body = body.decode("utf-8", "replace")
+            return json.loads(body).get("message") or str(body)
+        except Exception:
+            return str(body)
+    return str(e)
+
+
 class LocalBackend:
     name = "Local (CPU/GPU)"
     remote = False
@@ -101,7 +114,13 @@ class LightningBackend:
                 last = RuntimeError(f"did not reach Running (status={self._studio.status})")
             except Exception as e:
                 last = e
-        raise RuntimeError(f"could not start the Studio on a T4: {last}")
+                if "insufficient balance" in _api_message(e).lower():
+                    # out of credits — no GPU tier will start, so don't bother trying the others
+                    raise RuntimeError(
+                        "Lightning account has insufficient balance to start a GPU. Add credits at "
+                        "lightning.ai (Billing), wait for your monthly free-credit reset, or switch "
+                        "accounts by editing the LIGHTNING_* values in .env.local.") from None
+        raise RuntimeError(f"could not start a T4 Studio: {_api_message(last)}")
 
     def connect(self) -> str:
         sys.path.insert(0, str(ROOT))
@@ -117,23 +136,30 @@ class LightningBackend:
     def available(self) -> bool:
         return self._studio is not None
 
+    def _require(self):
+        """Fail with a clear message (not 'NoneType has no attribute run') if connect() didn't succeed."""
+        if self._studio is None:
+            raise RuntimeError("Not connected - click Connect (Lightning.ai) in the sidebar first.")
+        return self._studio
+
     def ensure_data(self) -> str:
         """Make sure INSAT data exists on the Studio; report what's there (download is a separate action)."""
-        return self._studio.run(
+        return self._require().run(
             "cd ~/ps12 && echo INSAT_FILES=$(ls samples/insat/*.h5 data/insat/*.h5 2>/dev/null | wc -l) "
             "GOES_FILES=$(ls data/goes19/*.nc 2>/dev/null | wc -l)")
 
     def download_insat(self, user: str, pwd: str) -> str:
-        return self._studio.run(
+        return self._require().run(
             f"cd ~/ps12 && MOSDAC_USERNAME='{user}' MOSDAC_PASSWORD='{pwd}' "
             f"python data_setup.py --download insat --sample 2>&1 | tail -5")
 
     def list_insat(self) -> list[str]:
-        out = self._studio.run("cd ~/ps12 && ls samples/insat/*.h5 data/insat/*.h5 2>/dev/null")
+        out = self._require().run("cd ~/ps12 && ls samples/insat/*.h5 data/insat/*.h5 2>/dev/null")
         return [ln.strip() for ln in out.splitlines() if ln.strip().endswith(".h5")]
 
     def interpolate_bt(self, source: str, p0, p2, model_name: str, kwargs: dict, t: float = 0.5) -> np.ndarray:
         """Run interpolation on the Studio; return a downsampled BT preview via base64 .npy."""
+        self._require()
         self._ensure_running()  # the box may have auto-stopped while idle since connect()
         wkw = json.dumps(kwargs or {})
         cmd = (
