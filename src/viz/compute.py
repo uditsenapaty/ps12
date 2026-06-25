@@ -12,7 +12,9 @@ from __future__ import annotations
 import base64
 import io
 import json
+import os
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -60,20 +62,56 @@ class LightningBackend:
     def __init__(self):
         self._studio = None
 
+    def _machines(self) -> list:
+        """Cheapest-first T4 list. T4_SMALL (lit-t4-1-small) is the same T4 GPU on a smaller host =
+        fewer credits/hr than T4 — plenty for a single-frame inference. Falls back to T4 if the small
+        host is unavailable. Override the first choice with LIGHTNING_MACHINE (e.g. T4, L4)."""
+        from lightning_sdk import Machine
+        first = getattr(Machine, os.environ.get("LIGHTNING_MACHINE", "T4_SMALL"), Machine.T4_SMALL)
+        out = [first]
+        # NOTE: Machine.__eq__ compares by GPU family, so T4 == T4_SMALL; dedup by slug to keep the
+        # full-host T4 as a real fallback when the cheaper small host is unavailable.
+        slugs = {getattr(m, "slug", None) for m in out}
+        if getattr(Machine.T4, "slug", "lit-t4-1") not in slugs:
+            out.append(Machine.T4)
+        return out
+
+    def _ensure_running(self) -> None:
+        """Start the Studio and BLOCK until it reports Running — so the first .run() never hits a
+        Stopped Studio. start() usually blocks, but we poll status as a safety net and surface the
+        real reason on failure instead of swallowing it."""
+        from lightning_sdk.status import Status
+        if self._studio.status == Status.Running:
+            return
+        for _ in range(40):  # wait out a transient Stopping (~2 min) before we can start again
+            if self._studio.status != Status.Stopping:
+                break
+            time.sleep(3)
+        last = None
+        for mc in self._machines():
+            try:
+                try:
+                    self._studio.start(mc, interruptible=False)  # on-demand: an inference run isn't pre-empted
+                except TypeError:
+                    self._studio.start(mc)                       # older SDK: no interruptible kwarg
+                for _ in range(120):  # poll up to ~6 min for the box to boot
+                    if self._studio.status == Status.Running:
+                        return
+                    time.sleep(3)
+                last = RuntimeError(f"did not reach Running (status={self._studio.status})")
+            except Exception as e:
+                last = e
+        raise RuntimeError(f"could not start the Studio on a T4: {last}")
+
     def connect(self) -> str:
         sys.path.insert(0, str(ROOT))
         from cloud.lightning_exec import get_studio
-        from lightning_sdk import Machine
         self._studio = get_studio()
         try:
-            self._studio.start(Machine.T4, interruptible=False)   # cheapest GPU, on-demand
-        except TypeError:
-            try:
-                self._studio.start(Machine.T4)
-            except Exception:
-                pass
-        except Exception:
-            pass
+            self._ensure_running()
+        except Exception as e:
+            self._studio = None
+            return f"Connect failed while starting the Studio: {e}"
         return self._studio.run("cd ~/ps12 2>/dev/null; echo CONNECTED $(nvidia-smi -L 2>/dev/null | head -1)")
 
     def available(self) -> bool:
@@ -96,6 +134,7 @@ class LightningBackend:
 
     def interpolate_bt(self, source: str, p0, p2, model_name: str, kwargs: dict, t: float = 0.5) -> np.ndarray:
         """Run interpolation on the Studio; return a downsampled BT preview via base64 .npy."""
+        self._ensure_running()  # the box may have auto-stopped while idle since connect()
         wkw = json.dumps(kwargs or {})
         cmd = (
             "cd ~/ps12 && python - <<'PY'\n"
