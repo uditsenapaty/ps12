@@ -74,11 +74,23 @@ def goes_fixed_grid_lonlat(ds: xr.Dataset) -> tuple[np.ndarray, np.ndarray]:
     return lat.astype(np.float32), lon.astype(np.float32)
 
 
-def read_goes_nc(path: str | Path, source: str = "goes19", with_lonlat: bool = False) -> SatFrame:
-    """Read a GOES ABI L1b Radiances file (single channel, e.g. C13) into a SatFrame."""
+def read_goes_nc(path: str | Path, source: str = "goes19", with_lonlat: bool = False,
+                 crop_frac: float | None = None) -> SatFrame:
+    """Read a GOES ABI L1b Radiances file (single channel, e.g. C13) into a SatFrame.
+
+    crop_frac (0<f<=1): read only the central fraction of the disk (sliced lazily before loading) —
+    a big speed-up for training, since the full disk is ~5424² and mostly off-limb space.
+    """
     path = Path(path)
     with xr.open_dataset(path, mask_and_scale=True) as ds:
-        rad = ds["Rad"].values.astype(np.float32)
+        rad_da = ds["Rad"]
+        if crop_frac and crop_frac < 1.0:
+            h, w = rad_da.shape
+            ch, cw = int(h * crop_frac), int(w * crop_frac)
+            y0, x0 = (h - ch) // 2, (w - cw) // 2
+            rad = rad_da[y0:y0 + ch, x0:x0 + cw].values.astype(np.float32)
+        else:
+            rad = rad_da.values.astype(np.float32)
         fk1 = float(ds["planck_fk1"].values)
         fk2 = float(ds["planck_fk2"].values)
         bc1 = float(ds["planck_bc1"].values)

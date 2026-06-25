@@ -16,10 +16,14 @@ from ..data.normalize import BT_MAX_DEFAULT, BT_MIN_DEFAULT, bt_to_norm, fill_in
 from ..data.readers import read_frame
 
 
-@lru_cache(maxsize=8)
-def _read_norm(path: str, source: str, bt_min: float, bt_max: float) -> np.ndarray:
-    """Cached read -> normalized [0,1] (NaN-filled with 0). Cache avoids re-reading shared frames."""
-    fr = read_frame(path, source, with_lonlat=False)
+@lru_cache(maxsize=48)
+def _read_norm(path: str, source: str, bt_min: float, bt_max: float, crop_frac: float) -> np.ndarray:
+    """Cached read -> normalized [0,1] (NaN-filled with 0). Cache avoids re-reading shared frames.
+    `crop_frac` reads only the central fraction of the disk (big training speed-up for GOES full disk)."""
+    kw: dict = {"with_lonlat": False}
+    if crop_frac and source.lower().startswith("goes"):
+        kw["crop_frac"] = crop_frac
+    fr = read_frame(path, source, **kw)
     n, _ = fill_invalid(bt_to_norm(fr.bt, bt_min, bt_max))
     return n.astype(np.float32)
 
@@ -39,6 +43,7 @@ class SatTripletDataset:
         augment: bool = True,
         min_valid_frac: float = 0.5,
         seed: int = 1234,
+        crop_frac: float = 0.35,
     ):
         if triplets is None:
             if index_json is None:
@@ -52,6 +57,7 @@ class SatTripletDataset:
         self.bt_min, self.bt_max = bt_min, bt_max
         self.augment = augment
         self.min_valid_frac = min_valid_frac
+        self.crop_frac = crop_frac
         self.rng = np.random.default_rng(seed)
 
     def __len__(self) -> int:
@@ -85,9 +91,9 @@ class SatTripletDataset:
 
     def __getitem__(self, i: int):
         p0, p1, p2 = self.triplets[i]
-        a = _read_norm(str(p0), self.source, self.bt_min, self.bt_max)
-        b = _read_norm(str(p1), self.source, self.bt_min, self.bt_max)
-        c = _read_norm(str(p2), self.source, self.bt_min, self.bt_max)
+        a = _read_norm(str(p0), self.source, self.bt_min, self.bt_max, self.crop_frac)
+        b = _read_norm(str(p1), self.source, self.bt_min, self.bt_max, self.crop_frac)
+        c = _read_norm(str(p2), self.source, self.bt_min, self.bt_max, self.crop_frac)
         a, b, c = self._sample_patch(a, b, c)
         a, b, c = self._augment(a, b, c)
         try:
