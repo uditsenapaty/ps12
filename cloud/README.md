@@ -6,6 +6,27 @@ pick (or reads them from `.env.local`), connects to a box that has **already com
 the box isn't set up yet it **errors** (checkpoints are large and not committed — they live only in the
 server's persistent storage). Use `--bootstrap` for a one-time setup (clone models + download data).
 
+## The three commands you'll actually use
+Creds live in **`.env.local`** (gitignored). To use a **different account**, just edit those values
+(`LIGHTNING_USER_ID`, `LIGHTNING_API_KEY`, `MOSDAC_USERNAME/PASSWORD`, `REPO_URL`) before running.
+
+```bash
+# 1) RUN THE WEB APP (anywhere) — connects to the already-set-up Studio from the in-page "Connect" button
+streamlit run src/viz/dashboard.py
+#    sidebar → Compute = "Lightning.ai (T4)" → 🔌 Connect → "Use server files" → pick INSAT → Interpolate.
+
+# 2) SET UP DATA on the Studio (one-time, or with different creds after editing .env.local)
+python connect.py --provider lightning --bootstrap --full-data
+#    clones model repos + downloads GOES/Himawari/INSAT into the Studio's 100 GB persistent storage.
+
+# 3) RE-TRAIN with chosen args + re-commit new validation results to git (one command)
+python scripts/cloud_retrain.py --steps 8000 --pinn --source goes19 --commit
+#    trains on the T4 with your args → runs the validation report → fetches report.md →
+#    git commit + push (validation_report/<source>[_pinn]/report.md). Omit --pinn / --commit as needed.
+```
+Tip (different creds inline, instead of editing the file): on PowerShell
+`$env:LIGHTNING_API_KEY="…"; streamlit run src/viz/dashboard.py`.
+
 | Provider | What it does | Persistent storage | Creds (.env.local or prompted) |
 |----------|--------------|--------------------|--------------------------------|
 | **Lightning.ai** | starts/reuses a **Studio on a T4** via `lightning_sdk`, syncs the repo, bootstraps data, trains | Studio home (**100 GB**, free T4 hrs) | `LIGHTNING_USER_ID`, `LIGHTNING_API_KEY`, `LIGHTNING_TEAMSPACE?`, `REPO_URL?` |
