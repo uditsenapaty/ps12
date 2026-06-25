@@ -143,6 +143,36 @@ with st.sidebar:
         st.caption("Not connected — local CPU is used. Pick **Lightning.ai** + Connect for the T4 + "
                    "server-side INSAT files.")
 
+    # --- live Lightning GPU credit rate + account balance (no connect/boot needed) ---
+    st.divider()
+    if st.button("💳 GPU rate & balance", key="btn_rates", use_container_width=True):
+        try:
+            from cloud.lightning_exec import rates_and_balance
+            with st.spinner("Querying Lightning billing…"):
+                st.session_state["rates"] = rates_and_balance("T4")
+        except Exception as e:
+            st.session_state["rates"] = {"error": str(e), "machines": [], "balance": None, "total_spent": None}
+    _rates = st.session_state.get("rates")
+    if _rates:
+        _bal = _rates.get("balance")
+        if _bal is not None:
+            _spent = _rates.get("total_spent")
+            st.markdown(f"- Balance: **{_bal:.2f} credits**"
+                        + (f" · spent to date: {_spent:.1f}" if _spent is not None else ""))
+            if _bal <= 0:
+                st.warning("0 credits — top up or switch account in `.env.local` to start a T4.")
+        _rows = _rates.get("machines") or []
+        if _rows:
+            _tbl = ["| T4 machine | cloud | on-demand/hr | spot/hr |", "|---|---|--:|--:|"]
+            for _m in _rows:
+                _tbl.append(f"| `{_m['slug']}` | {_m['provider']} | {_m['on_demand']} | {_m['spot']} |")
+            st.markdown("\n".join(_tbl))
+            _top = _rows[0]
+            st.caption(f"Inference default: **{_top['slug']}** ≈ **{_top['on_demand']} cr/hr** (cheapest). "
+                       "1 credit ≈ $1.")
+        if _rates.get("error"):
+            st.caption(f"note: {_rates['error']}")
+
 tab_interp, tab_upscale, tab_valid = st.tabs(["▶  Interpolate", "🔼  Temporal Upscaling", "📊  Validation Report"])
 
 # ---------------------------------------------------------------- Interpolate
