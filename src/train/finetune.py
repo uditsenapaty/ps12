@@ -22,7 +22,10 @@ from .losses import combined_loss
 
 def _loader(ds, batch_size, shuffle, workers=0):
     import torch
-    return torch.utils.data.DataLoader(ds, batch_size=batch_size, shuffle=shuffle, num_workers=workers, drop_last=True)
+    # drop_last=False so small datasets still yield a batch (UNetVFI has no batchnorm) — avoids an
+    # empty loader silently spinning the training loop forever.
+    return torch.utils.data.DataLoader(ds, batch_size=batch_size, shuffle=shuffle,
+                                       num_workers=workers, drop_last=False)
 
 
 def validate(net, ds, device, n: int = 8) -> dict:
@@ -49,7 +52,11 @@ def train(index: str, out: str, steps: int = 20000, lr: float = 1e-4, batch: int
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     ds = SatTripletDataset(index_json=index, patch=patch)
     val_ds = SatTripletDataset(index_json=val_index or index, patch=patch, augment=False)
-    loader = _loader(ds, batch, shuffle=True, workers=workers)
+    if len(ds) == 0:
+        raise RuntimeError(f"No triplets in {index}. Download more frames "
+                           f"(e.g. `python data_setup.py --download goes --max-gb 5`) then rebuild the index.")
+    eff_batch = max(1, min(batch, len(ds)))
+    loader = _loader(ds, eff_batch, shuffle=True, workers=workers)
 
     net = build_net()(base).to(device).train()
     if init_weights and Path(init_weights).exists():
