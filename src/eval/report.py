@@ -18,8 +18,16 @@ from ..models.factory import get_model
 from . import metrics
 
 
-def _norm_gt(path: str, source: str, bt_min: float, bt_max: float) -> np.ndarray:
-    fr = read_frame(path, source, with_lonlat=False)
+def _read_bt(path, source: str, crop_frac: float | None, with_lonlat: bool = False):
+    """Read a frame, cropping the central region for GOES (keeps eval fast + within memory)."""
+    kw: dict = {"with_lonlat": with_lonlat}
+    if crop_frac and source.lower().startswith("goes"):
+        kw["crop_frac"] = crop_frac
+    return read_frame(path, source, **kw)
+
+
+def _norm_gt(path: str, source: str, bt_min: float, bt_max: float, crop_frac: float | None = None) -> np.ndarray:
+    fr = _read_bt(path, source, crop_frac)
     n, _ = fill_invalid(bt_to_norm(fr.bt, bt_min, bt_max))
     return n
 
@@ -33,8 +41,9 @@ def run_eval(
     t: float = 0.5,
     bt_min: float = BT_MIN_DEFAULT,
     bt_max: float = BT_MAX_DEFAULT,
-    tile: int = 512,
-    overlap: int = 64,
+    tile: int = 256,
+    overlap: int = 32,
+    crop_frac: float | None = 0.3,
     max_triplets: int | None = None,
 ) -> list[dict]:
     out_dir = Path(out_dir)
@@ -47,12 +56,12 @@ def run_eval(
             print(f"[eval] skip '{name}' — not runnable here (needs weights/GPU). Run on server.")
             continue
         for k, (p0, pgt, p2) in enumerate(trips):
-            fr0 = read_frame(p0, source, with_lonlat=False)
-            fr2 = read_frame(p2, source, with_lonlat=False)
+            fr0 = _read_bt(p0, source, crop_frac)
+            fr2 = _read_bt(p2, source, crop_frac)
             pred_bt = interpolate_pair_bt(fr0.bt, fr2.bt, model, t, bt_min=bt_min, bt_max=bt_max,
                                           tile=tile, overlap=overlap)
             pred_n = bt_to_norm(pred_bt, bt_min, bt_max)
-            gt_n = _norm_gt(pgt, source, bt_min, bt_max)
+            gt_n = _norm_gt(pgt, source, bt_min, bt_max, crop_frac)
             m = metrics.compute_all(np.nan_to_num(pred_n), gt_n, bt_min=bt_min, bt_max=bt_max)
             m.update({"model": name, "triplet": k})
             rows.append(m)
@@ -61,17 +70,20 @@ def run_eval(
     summarize_and_report(rows, out_dir)
     if trips:
         try:
-            save_comparison_png(trips[0], source, model_names, out_dir, bt_min=bt_min, bt_max=bt_max, t=t)
+            save_comparison_png(trips[0], source, model_names, out_dir, bt_min=bt_min, bt_max=bt_max,
+                                t=t, crop_frac=crop_frac, tile=tile, overlap=overlap)
         except Exception as e:
             print(f"[eval] qualitative panel skipped: {e}")
         try:
-            save_timelapse_gif(trips[0], source, model_names, out_dir, bt_min=bt_min, bt_max=bt_max)
+            save_timelapse_gif(trips[0], source, model_names, out_dir, bt_min=bt_min, bt_max=bt_max,
+                               crop_frac=crop_frac, tile=tile, overlap=overlap)
         except Exception as e:
             print(f"[eval] timelapse gif skipped: {e}")
     return rows
 
 
-def save_comparison_png(triplet, source, model_names, out_dir, *, bt_min, bt_max, t=0.5):
+def save_comparison_png(triplet, source, model_names, out_dir, *, bt_min, bt_max, t=0.5,
+                        crop_frac=None, tile=256, overlap=32):
     """Qualitative panel: inputs, GT, each available model's prediction + |pred-GT| error maps."""
     import matplotlib
     matplotlib.use("Agg")
@@ -80,14 +92,15 @@ def save_comparison_png(triplet, source, model_names, out_dir, *, bt_min, bt_max
     from ..viz.animate import bt_to_rgb
     out_dir = Path(out_dir)
     p0, pgt, p2 = triplet
-    fr0 = read_frame(p0, source, with_lonlat=False)
-    fr2 = read_frame(p2, source, with_lonlat=False)
-    gt = read_frame(pgt, source, with_lonlat=False).bt
+    fr0 = _read_bt(p0, source, crop_frac)
+    fr2 = _read_bt(p2, source, crop_frac)
+    gt = _read_bt(pgt, source, crop_frac).bt
     preds: dict[str, np.ndarray] = {}
     for name in model_names:
         m = get_model(name)
         if m.available():
-            preds[name] = interpolate_pair_bt(fr0.bt, fr2.bt, m, t, bt_min=bt_min, bt_max=bt_max)
+            preds[name] = interpolate_pair_bt(fr0.bt, fr2.bt, m, t, bt_min=bt_min, bt_max=bt_max,
+                                              tile=tile, overlap=overlap)
     panels = [("input t0", fr0.bt, None), ("ground truth", gt, None)]
     for name, pr in preds.items():
         panels.append((name, pr, np.abs(np.nan_to_num(pr) - np.nan_to_num(gt))))
@@ -108,18 +121,20 @@ def save_comparison_png(triplet, source, model_names, out_dir, *, bt_min, bt_max
     print(f"[eval] qualitative panel -> {out_dir/'comparison_triplet0.png'}")
 
 
-def save_timelapse_gif(triplet, source, model_names, out_dir, *, bt_min, bt_max):
+def save_timelapse_gif(triplet, source, model_names, out_dir, *, bt_min, bt_max,
+                       crop_frac=None, tile=256, overlap=32):
     """Original (t0,GT,t2) vs interpolated (t0,pred,t2) side-by-side GIF for the best available model."""
     from ..viz.animate import write_side_by_side
     out_dir = Path(out_dir)
     p0, pgt, p2 = triplet
-    fr0 = read_frame(p0, source, with_lonlat=False)
-    fr2 = read_frame(p2, source, with_lonlat=False)
-    gt = read_frame(pgt, source, with_lonlat=False).bt
+    fr0 = _read_bt(p0, source, crop_frac)
+    fr2 = _read_bt(p2, source, crop_frac)
+    gt = _read_bt(pgt, source, crop_frac).bt
     chosen = next((n for n in model_names if get_model(n).available()), None)
     if chosen is None:
         return
-    pred = interpolate_pair_bt(fr0.bt, fr2.bt, get_model(chosen), 0.5, bt_min=bt_min, bt_max=bt_max)
+    pred = interpolate_pair_bt(fr0.bt, fr2.bt, get_model(chosen), 0.5, bt_min=bt_min, bt_max=bt_max,
+                               tile=tile, overlap=overlap)
     write_side_by_side([fr0.bt, gt, fr2.bt], [fr0.bt, pred, fr2.bt],
                        out_dir / f"timelapse_{chosen}.gif", fps=2, bt_min=bt_min, bt_max=bt_max)
     print(f"[eval] timelapse -> {out_dir}/timelapse_{chosen}.gif")
