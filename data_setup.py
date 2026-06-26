@@ -224,7 +224,7 @@ def build_index(data_dir: Path, source: str, step_min: float, out_json: Path,
         "triplets": [[str(a), str(b), str(c)] for a, b, c in trips],
         "leave_one_out": [[str(a), str(b), str(c)] for a, b, c in loo],
         "anytime": [[str(a), str(b), str(c), t] for a, b, c, t in anytime],
-        "multigap": [[str(near), str(tgt), [[str(f), t] for f, t in views]] for near, tgt, views in multigap],
+        "multigap": [[str(tgt), [[str(l), str(r)] for l, r in views]] for tgt, views in multigap],
     }
     out_json.parent.mkdir(parents=True, exist_ok=True)
     out_json.write_text(json.dumps(index, indent=2), encoding="utf-8")
