@@ -179,7 +179,8 @@ head(sl, "02 · Capabilities", "What the solution does", accent=BLUE)
 feats = [
     ("Five interpolation engines", "Custom UNetVFI + RIFE + FILM + Super-SloMo + RAFT, with a classical "
      "TV-L1 baseline for honest comparison.", BLUE),
-    ("Temporal upscaling", "2× (30→15) and 4× (30→7.5 min) by recursively inserting AI frames.", TEAL),
+    ("Temporal upscaling", "Recursive ×2/×4 (30→15→7.5) plus Continuous mode — any cadence, each frame "
+     "direct from two real frames (no error compounding).", TEAL),
     ("Standards I/O", "Reads .nc/.h5 (GOES / Himawari / INSAT), writes CF NetCDF brightness "
      "temperature — the PS contract.", VIOLET),
     ("Validated vs ground truth", "PSNR · SSIM · FSIM · MSE · MAE(K) · LPIPS + cloud-motion metrics "

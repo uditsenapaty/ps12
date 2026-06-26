@@ -38,7 +38,8 @@ from src.data.normalize import BT_MAX_DEFAULT, BT_MIN_DEFAULT, bt_to_norm  # noq
 from src.data.readers import read_frame  # noqa: E402
 from src.eval import metrics  # noqa: E402
 from src.infer.interpolate import interpolate_pair_bt  # noqa: E402
-from src.infer.upscale import temporal_upscale_bt, upscale_total_steps  # noqa: E402
+from src.infer.upscale import (  # noqa: E402
+    continuous_total_steps, temporal_upscale_bt, upscale_continuous_bt, upscale_total_steps)
 from src.models.factory import discover_models, get_model  # noqa: E402
 from src.viz.animate import bt_to_rgb, flow_overlay_rgb, frames_to_gif  # noqa: E402
 from src.viz.compute import get_backend  # noqa: E402
@@ -88,6 +89,24 @@ def _model_picker(models, key: str):
     labels = [m["label"] + ("" if m["available"] else "  ·  needs weights/GPU") for m in models]
     i = st.selectbox("Model", range(len(models)), format_func=lambda j: labels[j], key=key)
     return models[i]
+
+
+def _render_upscale_result(bts, dense, base_step, out_cad, caption):
+    """Shared output panel for both upscaling tabs: metrics + time-lapse gif (or a frame grid)."""
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Input frames", len(bts))
+    m2.metric("Output frames", len(dense))
+    m3.metric("Cadence", f"{out_cad:g} min", delta=f"-{base_step - out_cad:g} min", delta_color="inverse")
+    gif = Path(tempfile.gettempdir()) / "ps12_upscaled.gif"
+    try:
+        frames_to_gif(dense, gif, fps=4)
+        st.image(str(gif), caption=caption)
+    except Exception as e:
+        st.info(f"Animation unavailable ({e}); showing frames.")
+        for row in range(0, len(dense), 6):
+            for col, fr in zip(st.columns(6), dense[row:row + 6]):
+                col.image(bt_to_rgb(fr, BT_MIN_DEFAULT, BT_MAX_DEFAULT), use_column_width=True)
+    st.caption("Write the dense `.nc` sequence with `src.infer.upscale.temporal_upscale_nc(...)`.")
 
 
 models = _models()
@@ -279,59 +298,95 @@ with tab_interp:
                     col.metric(k.upper().replace("_", " "), f"{m[k]:.4f}")
 
 # ---------------------------------------------------------------- Temporal Upscaling
+def _load_sequence(seq_src, source, label):
+    """Load a list of uploads/paths to BT arrays with a progress bar."""
+    rbar = st.progress(0.0, text="📥 Loading frames…")
+    bts = []
+    for i, s in enumerate(seq_src):
+        bts.append(_load_bt(s, source))
+        rbar.progress((i + 1) / len(seq_src), text=f"📥 Loaded {i + 1}/{len(seq_src)} frames")
+    return bts
+
+
 with tab_upscale:
-    st.info("**Temporal upscaling** densifies a frame sequence by inserting AI-synthesised frames "
-            "between each consecutive pair — recursively. For INSAT-3DS/3DR: **30 → 15 → 7.5 min**.")
-    cfgL, cfgR = st.columns([1, 2], gap="large")
-    with cfgL:
-        source_u = st.selectbox("Satellite source", ["insat3ds", "insat3dr", "goes19", "himawari9"], key="src_u")
-        chosen_u = _model_picker(models, "mdl_u")
-        levels = st.radio("Upscaling", [1, 2], horizontal=True, key="lvl_u",
-                          format_func=lambda L: "30→15 (×2)" if L == 1 else "30→15→7.5 (×4)")
-        base_step = st.number_input("Source cadence (min)", value=30, min_value=1, key="step_u")
-    with cfgR:
-        ups = st.file_uploader("Upload time-ordered frames (.nc/.h5)", type=["nc", "h5"],
-                               accept_multiple_files=True, key="seq_u")
-        picks = st.multiselect("…or pick samples (in time order)", [str(p) for p in sample_files], key="seqpick_u")
-    go_u = st.button("Upscale sequence", type="primary", key="btn_u", use_container_width=True)
+    st.info("**Temporal upscaling** densifies a sequence by inserting AI frames between consecutive frames. "
+            "**Recursive** halves the gap repeatedly (×2/×4, power-of-2; reuses synthetic frames so error can "
+            "compound). **Continuous** inserts any number of frames per gap, each computed *directly* from the "
+            "two real frames (any cadence, no compounding; off-midpoint sharpness needs an `--anytime` model).")
+    up_rec, up_cont = st.tabs(["🔁  Recursive (×2 / ×4)", "♾️  Continuous (any cadence)"])
 
-    if go_u:
-        seq_src = list(ups) if ups else list(picks)
-        if len(seq_src) < 2:
-            st.error("Provide at least 2 frames in time order."); st.stop()
-        model_u = get_model(chosen_u["name"], **chosen_u["kwargs"])
-        with st.status(f"Upscaling ×{2 ** levels}…", expanded=True) as status:
-            rbar = st.progress(0.0, text="📥 Loading frames…")
-            bts = []
-            for i, s in enumerate(seq_src):
-                bts.append(_load_bt(s, source_u))
-                rbar.progress((i + 1) / len(seq_src), text=f"📥 Loaded {i + 1}/{len(seq_src)} frames")
-            total = max(1, upscale_total_steps(len(bts), levels))
-            done = {"n": 0}
-            ibar = st.progress(0.0, text="✨ Synthesising intermediate frames…")
+    # ---- Recursive (power-of-2, midpoint, may compound) ----
+    with up_rec:
+        cfgL, cfgR = st.columns([1, 2], gap="large")
+        with cfgL:
+            source_u = st.selectbox("Satellite source", ["insat3ds", "insat3dr", "goes19", "himawari9"], key="src_u")
+            chosen_u = _model_picker(models, "mdl_u")
+            levels = st.radio("Upscaling", [1, 2], horizontal=True, key="lvl_u",
+                              format_func=lambda L: "30→15 (×2)" if L == 1 else "30→15→7.5 (×4)")
+            base_step = st.number_input("Source cadence (min)", value=30, min_value=1, key="step_u")
+        with cfgR:
+            ups = st.file_uploader("Upload time-ordered frames (.nc/.h5)", type=["nc", "h5"],
+                                   accept_multiple_files=True, key="seq_u")
+            picks = st.multiselect("…or pick samples (in time order)", [str(p) for p in sample_files], key="seqpick_u")
+        if st.button("Upscale (recursive)", type="primary", key="btn_u", use_container_width=True):
+            seq_src = list(ups) if ups else list(picks)
+            if len(seq_src) < 2:
+                st.error("Provide at least 2 frames in time order."); st.stop()
+            model_u = get_model(chosen_u["name"], **chosen_u["kwargs"])
+            with st.status(f"Upscaling ×{2 ** levels}…", expanded=True) as status:
+                bts = _load_sequence(seq_src, source_u, "rec")
+                total = max(1, upscale_total_steps(len(bts), levels))
+                done = {"n": 0}
+                ibar = st.progress(0.0, text="✨ Synthesising intermediate frames…")
 
-            def _cb():
-                done["n"] += 1
-                ibar.progress(min(1.0, done["n"] / total), text=f"✨ Synthesised {done['n']}/{total} frames")
+                def _cb():
+                    done["n"] += 1
+                    ibar.progress(min(1.0, done["n"] / total), text=f"✨ Synthesised {done['n']}/{total} frames")
 
-            dense = temporal_upscale_bt(bts, model_u, levels=levels, progress=_cb)
-            status.update(label="Upscaling complete ✓", state="complete", expanded=False)
-        out_cad = base_step / (2 ** levels)
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Input frames", len(bts))
-        m2.metric("Output frames", len(dense))
-        m3.metric("Cadence", f"{out_cad:g} min", delta=f"-{base_step - out_cad:g} min", delta_color="inverse")
-        gif = Path(tempfile.gettempdir()) / "ps12_upscaled.gif"
-        try:
-            frames_to_gif(dense, gif, fps=4)
-            st.image(str(gif), caption=f"Upscaled time-lapse — {out_cad:g}-min cadence "
-                                       "(original frames preserved; intermediate frames synthetic)")
-        except Exception as e:
-            st.info(f"Animation unavailable ({e}); showing frames.")
-            for row in range(0, len(dense), 6):
-                for col, fr in zip(st.columns(6), dense[row:row + 6]):
-                    col.image(bt_to_rgb(fr, BT_MIN_DEFAULT, BT_MAX_DEFAULT), use_column_width=True)
-        st.caption("Write the dense `.nc` sequence with `src.infer.upscale.temporal_upscale_nc(...)`.")
+                dense = temporal_upscale_bt(bts, model_u, levels=levels, progress=_cb)
+                status.update(label="Upscaling complete ✓", state="complete", expanded=False)
+            out_cad = base_step / (2 ** levels)
+            _render_upscale_result(bts, dense, base_step, out_cad,
+                                   f"Recursive ×{2 ** levels} — {out_cad:g}-min cadence "
+                                   "(originals preserved; intermediates synthetic; built recursively).")
+
+    # ---- Continuous (arbitrary cadence, direct from real frames, no compounding) ----
+    with up_cont:
+        cfgL, cfgR = st.columns([1, 2], gap="large")
+        with cfgL:
+            source_uc = st.selectbox("Satellite source", ["insat3ds", "insat3dr", "goes19", "himawari9"], key="src_uc")
+            chosen_uc = _model_picker(models, "mdl_uc")
+            n_insert = st.slider("Frames to insert per gap (N)", 1, 9, 3, key="nins_uc",
+                                 help="Inserts N frames at t = k/(N+1), each computed directly from the two "
+                                      "real frames (no recursion). N=3 on 30-min input → 7.5-min cadence.")
+            base_step_c = st.number_input("Source cadence (min)", value=30, min_value=1, key="step_uc")
+            st.caption(f"→ output cadence ≈ **{base_step_c / (n_insert + 1):g} min** "
+                       f"(t = {', '.join(f'{k/(n_insert+1):.2f}' for k in range(1, n_insert + 1))})")
+        with cfgR:
+            ups_c = st.file_uploader("Upload time-ordered frames (.nc/.h5)", type=["nc", "h5"],
+                                     accept_multiple_files=True, key="seq_uc")
+            picks_c = st.multiselect("…or pick samples (in time order)", [str(p) for p in sample_files], key="seqpick_uc")
+        if st.button("Upscale (continuous)", type="primary", key="btn_uc", use_container_width=True):
+            seq_src = list(ups_c) if ups_c else list(picks_c)
+            if len(seq_src) < 2:
+                st.error("Provide at least 2 frames in time order."); st.stop()
+            model_uc = get_model(chosen_uc["name"], **chosen_uc["kwargs"])
+            with st.status(f"Inserting {n_insert} frame(s)/gap…", expanded=True) as status:
+                bts = _load_sequence(seq_src, source_uc, "cont")
+                total = max(1, continuous_total_steps(len(bts), n_insert))
+                done = {"n": 0}
+                ibar = st.progress(0.0, text="✨ Synthesising intermediate frames…")
+
+                def _cb_c():
+                    done["n"] += 1
+                    ibar.progress(min(1.0, done["n"] / total), text=f"✨ Synthesised {done['n']}/{total} frames")
+
+                dense = upscale_continuous_bt(bts, model_uc, n_insert, progress=_cb_c)
+                status.update(label="Upscaling complete ✓", state="complete", expanded=False)
+            out_cad = base_step_c / (n_insert + 1)
+            _render_upscale_result(bts, dense, base_step_c, out_cad,
+                                   f"Continuous — {n_insert} frame(s)/gap → {out_cad:g}-min cadence; "
+                                   "each frame direct from two real frames (no error compounding).")
 
 # ---------------------------------------------------------------- Validation Report
 with tab_valid:

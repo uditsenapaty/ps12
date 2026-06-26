@@ -308,20 +308,24 @@ example above.
 frames) as independent samples; §9.H (this) hardens the **midpoint** (15-min) prediction to be *gap-size
 consistent*. They're complementary and can both be on.
 
-### After it interpolates 3 frames for a triplet — are they *fused*? (No — here's what really happens)
-Two different modes, neither "fuses" the three into one image:
+### How the dashboard makes a denser clip — two upscaling modes (nothing is "fused")
+The **Temporal Upscaling** tab has two sub-tabs; neither averages frames together — each output frame is
+its own render, slotted into the timeline:
 
-- **Interpolate tab, ×4 (t=0.25, 0.5, 0.75):** three **independent** forward passes from the *same* two
-  real frames, each asked for a different `t`. They are simply **placed in sequence**
-  `[t0 → 0.25 → 0.5 → 0.75 → t2]` to make a denser clip. No averaging, no fusion — each is its own render.
-- **Temporal Upscaling tab (30→15→7.5):** **recursive midpoint insertion.** Level 1 inserts the t=0.5
-  frame between each real pair (30→15). Level 2 runs again on the *now-denser* sequence, so each 7.5-min
-  frame is the midpoint between a real frame and a *previously synthesised* 15-min frame. It **chains**,
-  it doesn't fuse — and because it builds on its own output, errors can compound.
+- **🔁 Recursive (×2 / ×4):** **midpoint insertion, repeated.** Level 1 inserts the t=0.5 frame between
+  each real pair (30→15). Level 2 runs again on the *now-denser* sequence, so each 7.5-min frame is the
+  midpoint between a real frame and a *previously synthesised* 15-min frame. Power-of-2 only, and because
+  it builds on its own output, **errors can compound**. Needs only a midpoint (t=0.5) model — works today.
+- **♾️ Continuous (any cadence):** insert **N frames per gap** at `t = k/(N+1)`, each computed **directly
+  from the two real frames** — never from a synthetic one. So the cadence is arbitrary (output cadence =
+  input/(N+1); N=3 on 30-min → 7.5 min) and there is **no compounding**. The catch: the off-midpoint
+  frames (t≠0.5) are only as sharp as the model is at those times → they want an **`--anytime`-trained**
+  model (§9.G); with a midpoint-only model they fall back to linear flow-scaling and look soft.
 
-**The payoff of §9.G:** with a time-conditioned model you can skip the recursion and interpolate
-t=0.25/0.75 **directly from the two original frames** (no synthetic-frame feedback), which avoids that
-error compounding for the 7.5-min product. That's the concrete reason arbitrary-time training is worth it.
+**So the trade-off is explicit in the UI:** Recursive is robust today but power-of-2 and slightly
+compounding; Continuous is arbitrary-cadence and compounding-free but only pays off once the model has
+seen off-midpoint times in training. (The **Interpolate** tab's ×4 is the same idea for a single pair:
+three independent renders at t=0.25/0.5/0.75, placed in sequence.)
 
 ### Quick priority list
 1. **Train UNetVFI longer on more GOES/Himawari days** → it should pass the baselines. *(cheapest win)*

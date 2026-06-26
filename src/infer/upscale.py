@@ -44,11 +44,42 @@ def upscale_once_bt(frames: list[np.ndarray], model: Interpolator, progress=None
 
 def temporal_upscale_bt(frames: list[np.ndarray], model: Interpolator, levels: int = 2,
                         progress=None, **kw) -> list[np.ndarray]:
-    """Apply `upscale_once_bt` `levels` times (30→15→7.5 for levels=2)."""
+    """RECURSIVE upscaling: apply `upscale_once_bt` `levels` times (30→15→7.5 for levels=2).
+
+    Power-of-2 only, and deeper levels interpolate against PREVIOUSLY SYNTHESISED frames, so error can
+    compound. Use `upscale_continuous_bt` for arbitrary cadence with no compounding.
+    """
     seq = list(frames)
     for _ in range(levels):
         seq = upscale_once_bt(seq, model, progress=progress, **kw)
     return seq
+
+
+def continuous_total_steps(n_frames: int, n_insert: int) -> int:
+    """Number of interpolations for the continuous upscaler's progress bar."""
+    return max(0, n_frames - 1) * max(0, n_insert)
+
+
+def upscale_continuous_bt(frames: list[np.ndarray], model: Interpolator, n_insert: int,
+                          progress=None, **kw) -> list[np.ndarray]:
+    """CONTINUOUS upscaling: insert `n_insert` frames between each consecutive ORIGINAL pair at
+    t = k/(n_insert+1), k=1..n_insert — each computed DIRECTLY from the two real frames.
+
+    Unlike `temporal_upscale_bt`, this never feeds a synthesised frame back in, so there is NO error
+    compounding and the cadence is arbitrary (output cadence = input_cadence / (n_insert+1)). Off-midpoint
+    frames (t≠0.5) need an arbitrary-time-trained model for full sharpness.
+    """
+    if n_insert < 1:
+        return list(frames)
+    out: list[np.ndarray] = []
+    for i in range(len(frames) - 1):
+        out.append(frames[i])
+        for k in range(1, n_insert + 1):
+            out.append(interpolate_pair_bt(frames[i], frames[i + 1], model, k / (n_insert + 1), **kw))
+            if progress:
+                progress()
+    out.append(frames[-1])
+    return out
 
 
 def temporal_upscale_nc(

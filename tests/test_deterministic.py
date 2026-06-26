@@ -133,6 +133,24 @@ def test_build_multigap_symmetric():
     assert all(len(v) == 1 for v in g1.values())
 
 
+def test_continuous_upscale_count_and_direct():
+    pytest.importorskip("xarray")
+    from src.infer.upscale import upscale_continuous_bt, continuous_total_steps
+
+    class _Fake:                       # weight-free linear interpolator (Interpolator interface)
+        name = "fake"
+        def ensure_available(self): pass
+        def interpolate(self, f0, f1, t): return (1.0 - t) * f0 + t * f1
+
+    frames = [np.full((16, 16), v, dtype="float32") for v in (200.0, 250.0, 300.0)]  # in-range BT
+    out = upscale_continuous_bt(frames, _Fake(), n_insert=3)            # 3 inserts per gap
+    assert continuous_total_steps(len(frames), 3) == 6
+    assert len(out) == len(frames) + 6 == 9                             # originals preserved + inserts
+    means = [float(f.mean()) for f in out]
+    assert means[0] == 200.0 and means[4] == 250.0 and means[8] == 300.0  # originals at the right slots
+    assert means[1] < means[2] < means[3]                              # off-midpoint frames, direct & ordered
+
+
 def test_unet_vfi_is_t_conditioned():
     """t must actually change the output (it's an input feature, not just a post-hoc flow scale)."""
     torch = pytest.importorskip("torch")
