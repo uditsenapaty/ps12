@@ -108,14 +108,17 @@ def connect_lightning(do_train: bool, full_data: bool, do_serve: bool = False, b
     ensure_pip("lightning-sdk", "lightning_sdk")
     get_or_prompt("LIGHTNING_USER_ID", "Lightning user id")
     get_or_prompt("LIGHTNING_API_KEY", "Lightning API key")
-    teamspace = get_or_prompt("LIGHTNING_TEAMSPACE", "Lightning teamspace (e.g. you/vision)",
-                              secret=False, required=False) or None
+    get_or_prompt("LIGHTNING_TEAMSPACE", "Lightning teamspace (e.g. you/vision)",
+                  secret=False, required=False)
     studio_name = os.environ.get("LIGHTNING_STUDIO", "ps12")
     repo_url = get_or_prompt("REPO_URL", "git URL of this repo (recommended)", secret=False, required=False)
 
-    from lightning_sdk import Machine, Studio
+    from lightning_sdk import Machine
+    # use the robust resolver (handles org-less personal accounts where LIGHTNING_ORG is really the
+    # username — a direct Studio(...) would 404 with "Organization not found").
+    from cloud.lightning_exec import get_studio
     print(f"[lightning] starting Studio '{studio_name}' on a T4 (on-demand / non-interruptible) …")
-    studio = Studio(name=studio_name, teamspace=teamspace, create_ok=True)
+    studio = get_studio()
     try:
         studio.start(Machine.T4, interruptible=False)   # T4 = cheapest GPU; on-demand = non-interruptible
     except TypeError:
