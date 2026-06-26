@@ -47,15 +47,15 @@ def build_net():
             return self.c(torch.cat([x, skip], 1))
 
     class UNetVFINet(nn.Module):
-        """Predicts (flow_t0[2], flow_t1[2], mask[1]) from concat(I0, I1, t-plane) and warps to time t.
+        """Predicts (flow_t0[2], flow_t1[2], mask[1]) from concat(I0, I1) and warps to time t.
 
-        t-conditioned: the target time t is fed in as a constant input channel (a "t-plane"), so the
-        network *sees* which intermediate time it must synthesise — this is what enables arbitrary-time
-        interpolation (any t∈(0,1), e.g. t=0.25/0.5/0.75 for 30→15→7.5) rather than assuming linear motion.
+        One IR band per frame, so the input is just the two frames (2 ch). Time `t` is *implicit*: the
+        network never sees t as a feature — it predicts a single base flow field, and t only SCALES it
+        (f_{t→0}=t·flow, f_{t→1}=(1−t)·flow) — the standard linear-motion intermediate-flow formulation.
         """
         def __init__(self, base: int = 32):
             super().__init__()
-            self.inc = nn.Sequential(conv(3, base), conv(base, base))   # I0, I1, t-plane (time-conditioned)
+            self.inc = nn.Sequential(conv(2, base), conv(base, base))   # concat(I0, I1) — one IR band each
             self.d1 = Down(base, base * 2)
             self.d2 = Down(base * 2, base * 4)
             self.d3 = Down(base * 4, base * 8)
@@ -77,17 +77,17 @@ def build_net():
 
         @staticmethod
         def _t_tensor(t, ref):
-            """t -> (B,1,1,1) tensor on ref's device/dtype. Accepts a python float (same t for the whole
-            batch) or a per-sample tensor of shape (B,) — so arbitrary-time batches mix different t."""
+            """t -> (B,1,1,1) tensor on ref's device/dtype, used to SCALE the flow. Accepts a python float
+            (same t for the batch) or a per-sample tensor of shape (B,) — so arbitrary-time/multigap batches
+            can mix different t. t is NOT concatenated as an input feature (it stays implicit)."""
             B = ref.shape[0]
             if torch.is_tensor(t):
                 return t.to(device=ref.device, dtype=ref.dtype).reshape(B, 1, 1, 1)
             return torch.full((B, 1, 1, 1), float(t), device=ref.device, dtype=ref.dtype)
 
         def forward(self, i0, i1, t: float = 0.5, return_aux: bool = False):
-            tt = self._t_tensor(t, i0)                                    # (B,1,1,1)
-            tplane = tt.expand(i0.shape[0], 1, i0.shape[-2], i0.shape[-1])  # t as a full-res input feature
-            x0 = self.inc(torch.cat([i0, i1, tplane], 1))
+            tt = self._t_tensor(t, i0)                                    # (B,1,1,1) — scales the flow only
+            x0 = self.inc(torch.cat([i0, i1], 1))
             x1 = self.d1(x0)
             x2 = self.d2(x1)
             x3 = self.d3(x2)

@@ -177,38 +177,24 @@ A **feature** = a piece of information the method gets to look at.
 |---|---|---|
 | Spectral bands | **1** thermal-IR band (~10 µm) | **1** thermal-IR band (~10 µm) |
 | Frames of context | 2 (before & after) | 2 (before & after) |
-| **Target time `t`** | implicit (always the midpoint) | **explicit input feature** (a "t-plane" channel) |
+| Target time `t` | implicit | **implicit** (scales the predicted flow) |
 | Motion model | hand-coded, assumes constant brightness + straight lines | **learned** motion field |
 | Occlusion / appearance change | **ignored** | **learned visibility mask** |
 | Knowledge of "what a cloud is" | none | learned from data |
 
-**Is the time a feature?** *Now, yes.* Previously the model was only ever shown two frames and
-internally assumed it was rendering the exact midpoint (t=0.5); the time `t` was used only to *linearly
-scale* the predicted motion afterwards — a straight-line-motion assumption. We changed this: **`t` is now
-fed into the network as an extra input channel** (a constant "t-plane" the same size as the image). So
-the network actually *sees* which intermediate moment it must paint — t=0.25, 0.5, 0.75 … — and can bend
-the motion non-linearly for each one. **This is what enables arbitrary-time interpolation — one model
-that renders any moment (30→15→7.5 min)** instead of faking the off-midpoint times. (See §9.G and
-Appendix A.3.)
+**Same raw inputs as the traditional method — one IR band, two frames.** That's deliberate and matches the
+problem statement: PS-12 is single-band thermal-IR optical-flow interpolation, so we do **not** add extra
+spectral bands. The model input is exactly the two frames (shape `(1, H, W)` each → 2 channels). The gain
+comes entirely from *learning* the motion + appearance changes instead of *assuming* them.
 
-Key point: we still use the same *raw imagery* as the traditional method (one IR band, two frames) — the
-gain comes from *learning* the motion + appearance changes, and now from *telling the model the exact
-time it's interpolating*. The big future gains come from **adding more features** (next).
+**How does `t` enter, then?** Implicitly. The network predicts a single base flow field and `t` simply
+**scales** it (`f_{t→0}=t·flow`, `f_{t→1}=(1−t)·flow`) — the standard intermediate-flow formulation. `t`
+is never concatenated as a feature; it's a knob on the warp, so any intermediate time (30→15→7.5 min) is
+just a different scale of the same flow. (See §9.G and Appendix A.3.)
 
 ---
 
 ## 9. How can we make it better? (the roadmap)
-
-### A. Use **more of the satellite's data** (the biggest lever)
-Geostationary imagers see **many channels**, not just one. Each adds physical information:
-- **Split-window IR** (e.g., 10.8 + 12.0 µm, INSAT TIR1+TIR2): the *difference* reveals thin cirrus and
-  cloud microphysics → better cloud-edge tracking.
-- **Water-vapour band (~6.7 µm):** shows mid-level moisture and **winds** even where there are no
-  clouds → motion cues classical flow can't get.
-- **Mid-IR (~3.9 µm):** great for **fire/hot-spot** detection and low cloud at night.
-- **Visible band (daytime):** very high-resolution cloud texture for sharper daytime motion.
-- → **Multi-band joint interpolation:** feed several channels together so the network estimates one
-  consistent motion field from all of them (this is what NASA's Vandal & Nemani did for GOES-R).
 
 ### B. Use **more time** (more than two frames)
 - Feed **3–5 past frames** (or a recurrent/transformer model) so the network learns **acceleration and
@@ -234,7 +220,7 @@ Geostationary imagers see **many channels**, not just one. Each adds physical in
 - Output not just images but **derived products** (cloud-top height/temperature motion) that forecasters
   use directly.
 
-### G. Arbitrary-time (time-conditioned) training **(implemented)**
+### G. Arbitrary-time training (implicit `t`, flow scaling) **(implemented)**
 This is the upgrade that makes the **30 → 15 → 7.5 min** product trustworthy.
 
 > **A note on naming.** This is *arbitrary-time* (a.k.a. continuous-time / any-time) interpolation
@@ -249,12 +235,11 @@ This is the upgrade that makes the **30 → 15 → 7.5 min** product trustworthy
 *any* in-between time, not just the middle. If a model only ever trains on the midpoint, the quarter
 points (t=0.25, 0.75 — the 7.5-min frames) are pure extrapolation under a straight-line assumption.
 
-**What we do now (two ideas together):**
-1. **`t` is an input feature** (the t-plane from §8). On its own this does nothing — it only matters
-   *because* of (2). It's the prerequisite that lets one model be *asked* for any time.
-2. **Configurable t-grid × gap granules (the actual capability).** From a dense sequence the index
-   builder (`build_anytime_samples`) emits training samples on a **t-grid** of spacing `time_step (dt)`
-   across **`gap_levels` gap sizes**, using **real frames** as the ground truth.
+**What we do now.** `t` stays **implicit** — it only scales the predicted flow (§8). The capability comes
+purely from the *training data*: we supervise that single flow at many times `t` and many gap sizes, so
+it's accurate enough that scaling it (`f_{t→0}=t·flow`) lands any intermediate moment. The index builder
+(`build_anytime_samples`) emits training samples on a **t-grid** of spacing `time_step (dt)` across
+**`gap_levels` gap sizes**, using **real frames** as the ground truth.
 
 **Configurable, because variable-`t` training is expensive** (`configs/default.yaml → anytime`, or
 `data_setup --time-step / --gap-levels`):
@@ -329,11 +314,10 @@ three independent renders at t=0.25/0.5/0.75, placed in sequence.)
 
 ### Quick priority list
 1. **Train UNetVFI longer on more GOES/Himawari days** → it should pass the baselines. *(cheapest win)*
-2. **Arbitrary-time (time-conditioned) training** *(implemented — §9.G)* → trustworthy 7.5-min frames. **Retrain `weights/unet` once** (the network input changed from 2→3 channels, so old checkpoints must be re-trained).
-3. **Add the water-vapour + split-window bands** → biggest physical accuracy gain.
-4. **Use 3+ frames of context** → captures rotation/acceleration.
-5. **Add a flow-consistency + temporal loss** → smoother, flicker-free animations.
-6. **(Stretch) diffusion refinement** → sharp clouds for extreme convective growth.
+2. **Multi-gap consistency + arbitrary-time training** *(implemented — §9.G/§9.H)* → robust midpoint + trustworthy off-midpoint frames.
+3. **Use 3+ frames of context** → captures rotation/acceleration (single IR band stays — per the PS).
+4. **Add a flow-consistency + temporal loss** → smoother, flicker-free animations.
+5. **(Stretch) diffusion refinement** → sharp clouds for extreme convective growth.
 
 ---
 
@@ -520,7 +504,7 @@ on `(u,v)` for even better grounding.)
 
 ### Pros & cons of going PINN
 **Pros:** physically plausible motion; models cloud **growth/dissipation** (the classical failure mode);
-better with **scarce data**; better **extrapolation**; naturally extends to multi-band/3-frame inputs.
+better with **scarce data**; better **extrapolation**; naturally extends to 3-frame (more-time) inputs.
 **Cons:** extra loss weighting to tune (`λ_phys`); needs differentiable finite-difference operators;
 can be trickier/slower to train; the advection model is first-order (very explosive convection still
 benefits from a generative/diffusion refinement on top).
@@ -614,16 +598,14 @@ crisp results.
 → This *visibility* idea is what we borrow for the mask `M`.
 
 ## A.3 Our custom UNetVFI — the exact operations
-1. **Input (time-aware):** concatenate `I₀, I₂` **and a constant "t-plane"** `T[x,y] = t` → a **3-channel**
-   tensor. Feeding `t` *into* the network (not just using it to scale the flow afterwards) is what lets one
-   model render any intermediate time and underpins arbitrary-time training (§9.G). `t` is a per-sample
-   value, so a batch can mix t = 0.25 / 0.5 / 0.75.
+1. **Input:** concatenate `I₀, I₂` (one IR band each, shape `(1,H,W)`) → a **2-channel** tensor. `t` is
+   **not** an input — it stays implicit and enters only at step 3.
 2. **U-Net:** encoder `32→64→128→256` (each block halves resolution), decoder back up with **skip
    connections**; final 1×1 conv **head** outputs **5 channels** → `raw_a (2), raw_b (2), mask_logit (1)`
    (+ a parallel **source head** `S (1)` for the PINN).
 3. **Scale to time & activate:** `F_{t→0} = t·raw_a`, `F_{t→1} = (1−t)·raw_b`, `M = σ(mask_logit)`.
-   (The network already saw `t` in step 1, so this linear scaling is now just a helpful prior, not the
-   *only* way time enters — the encoder can bend the motion non-linearly per `t`.)
+   This is the *only* place `t` enters: it linearly scales one predicted base flow (the standard
+   linear-motion intermediate-flow assumption). `t` is per-sample, so a batch can mix t = 0.25 / 0.5 / 0.75.
 4. **Warp (bilinear `grid_sample`):** `w₀ = warp(I₀, F_{t→0})`, `w₂ = warp(I₂, F_{t→1})`.
 5. **Blend:** `I_t = M ⊙ w₀ + (1−M) ⊙ w₂`, clamped to [0,1].
 6. **Training loss:** `L = Charbonnier(I_t, GT) + 0.1·gradient-L1 + 0.1·soft-census`

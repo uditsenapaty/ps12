@@ -151,8 +151,9 @@ def test_continuous_upscale_count_and_direct():
     assert means[1] < means[2] < means[3]                              # off-midpoint frames, direct & ordered
 
 
-def test_unet_vfi_is_t_conditioned():
-    """t must actually change the output (it's an input feature, not just a post-hoc flow scale)."""
+def test_unet_vfi_t_scaling():
+    """t is implicit (it scales the predicted flow, not an input channel); input is the two 1-band frames
+    (2 ch). Different t still changes the output via flow scaling, and per-sample t works."""
     torch = pytest.importorskip("torch")
     from src.models.unet_vfi import build_net
     net = build_net()(base=8).eval()
@@ -161,8 +162,8 @@ def test_unet_vfi_is_t_conditioned():
         a = net(i0, i1, 0.2)
         b = net(i0, i1, 0.8)
         assert a.shape == (1, 1, 64, 64)
-        assert float((a - b).abs().mean()) > 1e-4
-        # per-sample tensor t (arbitrary-time batch) returns one prediction per item
+        assert float((a - b).abs().mean()) > 1e-4          # t still affects the warp via flow scaling
+        # per-sample tensor t (arbitrary-time / multigap batch) -> one prediction per item
         pred = net(i0.repeat(3, 1, 1, 1), i1.repeat(3, 1, 1, 1), torch.tensor([0.25, 0.5, 0.75]))
         assert pred.shape == (3, 1, 64, 64)
 

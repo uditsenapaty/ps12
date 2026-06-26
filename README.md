@@ -22,17 +22,17 @@ motion) · Super-SloMo (baseline) · RAFT (flow/motion vectors) · classical TV-
 All open-source. Heavy nets used **pretrained**; the small UNetVFI is **trained** (cheap on a T4).
 
 ## Custom architecture — UNetVFI
-A compact flow-based interpolator we own end-to-end: a U-Net takes the two IR frames **plus the target
-time `t` as an input channel ("t-plane")** and predicts **bidirectional intermediate flow + a
-visibility/occlusion mask** (RIFE-style intermediate flow ⊕ Super-SloMo-style visibility blending), then
-backward-warps both inputs to time `t` and fuses them. Single IR band per frame (no RGB hack); the
-t-conditioning lets one model render **any** intermediate time. ~2–5 M params → trains from scratch on
-GOES/Himawari in hours on one T4; self-supervises on INSAT.
+A compact flow-based interpolator we own end-to-end: a U-Net takes the **two IR frames (one band each)**
+and predicts **bidirectional intermediate flow + a visibility/occlusion mask** (RIFE-style intermediate
+flow ⊕ Super-SloMo-style visibility blending), then backward-warps both inputs to time `t` and fuses them.
+Time `t` is **implicit** — it only scales the predicted flow (`f_{t→0}=t·flow`), so one model renders any
+intermediate time. Single IR band per frame, two-frame input (no extra bands — per the PS). ~2–5 M params
+→ trains from scratch on GOES/Himawari in hours on one T4; self-supervises on INSAT.
 
 ```
   frame t0 ─┐                      ┌──────────── U-Net encoder → decoder ────────────┐
-  frame t2 ─┼─► concat (3 ch) ────►│  inc 32 ─Down→ 64 ─Down→ 128 ─Down→ 256 (bottle)│
-  t-plane  ─┘   t0 · t2 · t        │     └─skip─┐  └─skip─┐  └─skip─┐                 │
+            ├─► concat (2 ch) ────►│  inc 32 ─Down→ 64 ─Down→ 128 ─Down→ 256 (bottle)│
+  frame t2 ─┘   1 IR band each     │     └─skip─┐  └─skip─┐  └─skip─┐                 │
                                    │      Up 32◄┘   Up 64◄┘  Up 128◄┘                 │
                                    │        │                                        │
                                    │     head → 5 channels                           │
@@ -146,8 +146,8 @@ Drives the Studio: sync → train with your args → validate → fetch `report.
 (balance + per-hour T4 credit rates) · `"<shell command>"` (run a command on the Studio).
 
 > Note: `--anytime` / `--multigap` use the samples the index already contains, controlled at build time
-> by `--time-step` / `--gap-levels` / `--multigap-levels`. The UNetVFI input is **time-conditioned (3 ch)**,
-> so after enabling these you must re-train `weights/unet` (old 2-ch checkpoints are skipped on load).
+> by `--time-step` / `--gap-levels` / `--multigap-levels`. The model input is the **two IR frames (2 ch);
+> `t` is implicit** (it scales the flow). Re-train `weights/unet` after changing these training settings.
 
 ## Quickstart (local, CPU)
 ```bash
