@@ -281,6 +281,33 @@ Turn it on: `data_setup --build-index --time-step 0.25 --gap-levels 3` then `fin
 Why it matters: the model learns genuine **non-linear, any-time** interpolation across **a range of gap
 sizes**, which is exactly the GOES (20 min) → INSAT (60 min) jump the transfer has to survive.
 
+### H. Temporal multi-granularity — one frame, several gaps, **one combined loss** (implemented)
+This is the *true* multi-granularity (in **time**, not image resolution): instead of training each
+(gap, t) as a separate sample (§9.G), we reconstruct the **same target frame from several gap sizes at
+once** and **add the errors into a single loss**, so the model is forced to render that frame
+*consistently* no matter how wide the bracket is.
+
+**Construction (symmetric, midpoint).** For a target frame `g`, granularity level `L` uses the
+**symmetric** bracket `(g−L·cadence, g+L·cadence)` — `g` is always the midpoint, so t=0.5. Bounded by the
+sequence ends:
+- `frame@10` → only `(0,20)` (level 1; there's no frame before 0)
+- `frame@20` → `(10,30)` (level 1) **and** `(0,40)` (level 2)
+- `frame@30` → `(20,40)` **and** `(10,50)`
+
+**The loss.** `L_total = mean over valid levels of combined_loss( model(left_L, right_L, 0.5), target )`.
+The tight bracket (gentle motion) is easy and pins the answer; the wide bracket (large motion) is hard
+and is pulled toward the *same* target — so the easy view **regularizes** the hard one and the model
+can't cheat by being bracket-dependent. Targets near the sequence start contribute fewer levels (they're
+masked), so each frame uses exactly the brackets that physically exist.
+
+**Configurable** (it costs ≈`levels`× per step): `configs/default.yaml → multigap.levels`, or
+`data_setup --build-index --multigap-levels N`, then `finetune … --multigap`. `levels=2` reproduces the
+example above.
+
+**Relationship to §9.G:** §9.G (arbitrary-time) teaches *off-midpoint* times (t=0.25/0.75 for the 7.5-min
+frames) as independent samples; §9.H (this) hardens the **midpoint** (15-min) prediction to be *gap-size
+consistent*. They're complementary and can both be on.
+
 ### After it interpolates 3 frames for a triplet — are they *fused*? (No — here's what really happens)
 Two different modes, neither "fuses" the three into one image:
 

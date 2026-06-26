@@ -112,3 +112,101 @@ class SatTripletDataset:
             return {"I0": to(a), "GT": to(b), "I1": to(c), "t": float(t)}
         except Exception:
             return {"I0": a[None], "GT": b[None], "I1": c[None], "t": float(t)}
+
+
+class MultiGapDataset:
+    """Symmetric temporal multi-granularity: ONE target frame + several SYMMETRIC (left,right) brackets.
+
+    Each item yields dict(GT=target, LEFTS=(M,1,H,W), RIGHTS=(M,1,H,W), MASK=(M,)) where M = the dataset's
+    max granularity level. Bracket L reconstructs the SAME target at the midpoint (t=0.5); MASK flags
+    which levels are real (a target near the sequence start, e.g. frame@10, has only level 1 -> the rest
+    are zero-padded and masked out). The training step sums the loss of every *valid* bracket. The same
+    spatial patch + augmentation is applied across the target and all left/right frames.
+    """
+
+    def __init__(
+        self,
+        index_json: str | Path | None = None,
+        groups: list | None = None,
+        source: str = "goes19",
+        patch: int = 256,
+        bt_min: float = BT_MIN_DEFAULT,
+        bt_max: float = BT_MAX_DEFAULT,
+        augment: bool = True,
+        min_valid_frac: float = 0.5,
+        seed: int = 1234,
+        crop_frac: float = 0.35,
+    ):
+        if groups is None:
+            if index_json is None:
+                raise ValueError("provide index_json or groups")
+            data = json.loads(Path(index_json).read_text(encoding="utf-8"))
+            source = data.get("source", source)
+            groups = data.get("multigap", [])
+        # (target, [(left, right), ...])
+        self.groups = [(str(g[0]), [(str(l), str(r)) for l, r in g[1]]) for g in groups]
+        self.max_level = max((len(v) for _, v in self.groups), default=1)
+        self.source = source
+        self.patch = patch
+        self.bt_min, self.bt_max = bt_min, bt_max
+        self.augment = augment
+        self.min_valid_frac = min_valid_frac
+        self.crop_frac = crop_frac
+        self.rng = np.random.default_rng(seed)
+
+    def __len__(self) -> int:
+        return len(self.groups)
+
+    def _crop(self, frames: list[np.ndarray], valid_idx: int):
+        """Crop the SAME patch from every frame; require enough valid signal in the target frame."""
+        h, w = frames[0].shape
+        p = self.patch
+        if h <= p or w <= p:
+            return frames
+        for _ in range(10):
+            y = int(self.rng.integers(0, h - p))
+            x = int(self.rng.integers(0, w - p))
+            if np.mean(frames[valid_idx][y:y + p, x:x + p] > 0) >= self.min_valid_frac:
+                return [f[y:y + p, x:x + p] for f in frames]
+        return [f[:p, :p] for f in frames]
+
+    def _augment(self, frames: list[np.ndarray]):
+        if not self.augment:
+            return frames
+        k = int(self.rng.integers(0, 4))
+        flip = bool(self.rng.integers(0, 2))
+        out = []
+        for a in frames:
+            a = np.rot90(a, k)
+            if flip:
+                a = np.fliplr(a)
+            out.append(np.ascontiguousarray(a))
+        return out
+
+    def __getitem__(self, i: int):
+        target, views = self.groups[i]
+        rd = lambda p: _read_norm(p, self.source, self.bt_min, self.bt_max, self.crop_frac)
+        frames = [rd(target)]                                  # index 0 = target (used for crop validity)
+        for left, right in views:
+            frames += [rd(left), rd(right)]
+        frames = self._crop(frames, valid_idx=0)
+        frames = self._augment(frames)
+        tgt = frames[0]
+        lefts = frames[1::2]                                   # one per real view
+        rights = frames[2::2]
+        M = self.max_level
+        h, w = tgt.shape
+        pad = np.zeros((h, w), dtype="float32")
+        lefts += [pad] * (M - len(lefts))                      # zero-pad to max_level
+        rights += [pad] * (M - len(rights))
+        mask = np.array([1.0] * len(views) + [0.0] * (M - len(views)), dtype="float32")
+        try:
+            import torch
+            to = lambda x: torch.from_numpy(np.ascontiguousarray(x)).float()[None]
+            return {"GT": to(tgt),
+                    "LEFTS": torch.stack([to(f) for f in lefts]),    # (M, 1, H, W)
+                    "RIGHTS": torch.stack([to(f) for f in rights]),
+                    "MASK": torch.from_numpy(mask)}                  # (M,)
+        except Exception:
+            return {"GT": tgt[None], "LEFTS": np.stack([f[None] for f in lefts]),
+                    "RIGHTS": np.stack([f[None] for f in rights]), "MASK": mask}

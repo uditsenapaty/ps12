@@ -31,6 +31,8 @@ def main() -> None:
     ap.add_argument("--pinn-weight", type=float, default=0.1)
     ap.add_argument("--anytime", action="store_true",
                     help="arbitrary-time training on variable-(gap, t) samples (30→15→7.5 ready)")
+    ap.add_argument("--multigap", action="store_true",
+                    help="temporal multi-granularity: each target supervised from symmetric gaps (combined loss)")
     ap.add_argument("--source", default="goes19", help="goes19 | himawari9 | insat3dr")
     ap.add_argument("--out", default="weights/unet")
     ap.add_argument("--models", default="classical,raft,unet", help="models to compare in the report")
@@ -54,15 +56,17 @@ def main() -> None:
 
     pinn = f"--pinn --pinn-weight {a.pinn_weight}" if a.pinn else ""
     at = "--anytime" if a.anytime else ""
-    exp = a.source + ("_pinn" if a.pinn else "") + ("_at" if a.anytime else "")
+    mg = "--multigap" if a.multigap else ""
+    exp = a.source + ("_pinn" if a.pinn else "") + ("_at" if a.anytime else "") + ("_mg" if a.multigap else "")
     models = "[" + ",".join(f"'{m.strip()}'" for m in a.models.split(",")) + "]"
 
-    extras = " ".join(x for x in ("+PINN" if a.pinn else "", "+anytime" if a.anytime else "") if x)
+    extras = " ".join(x for x in ("+PINN" if a.pinn else "", "+anytime" if a.anytime else "",
+                                  "+multigap" if a.multigap else "") if x)
     print(f"[retrain] training {a.source}: {a.steps} steps {extras} on the T4 …")
     print(studio.run(
         "cd ~/ps12 && git fetch -q && git reset --hard origin/main -q && git clean -fd -q 2>/dev/null; "
         f"python -m src.train.finetune --index data/index/{a.source}_triplets.json "
-        f"--steps {a.steps} --batch {a.batch} {pinn} {at} --out {a.out} --device cuda 2>&1 | tail -6"))
+        f"--steps {a.steps} --batch {a.batch} {pinn} {at} {mg} --out {a.out} --device cuda 2>&1 | tail -6"))
 
     print("[retrain] validating …")
     print(studio.run(

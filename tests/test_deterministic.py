@@ -117,6 +117,22 @@ def test_build_anytime_configurable_grid():
         build_anytime_samples(indexed, cadence_minutes=10, time_step=0.3)
 
 
+def test_build_multigap_symmetric():
+    from datetime import datetime, timedelta
+    from src.data.triplets import build_multigap_groups
+    base = datetime(2026, 6, 24, 0, 0)
+    indexed = [(base + timedelta(minutes=10 * i), str(10 * i)) for i in range(8)]  # frames named by minute
+    groups = dict((tgt, views) for tgt, views in build_multigap_groups(indexed, cadence_minutes=10, max_level=2))
+    # symmetric brackets centered on the target, bounded by the sequence start
+    assert groups["10"] == [("0", "20")]                       # frame@10: only level 1 (nothing before 0)
+    assert groups["20"] == [("10", "30"), ("0", "40")]         # frame@20: levels 1 and 2
+    assert groups["30"] == [("20", "40"), ("10", "50")]
+    assert "0" not in groups                                    # first frame has no left neighbour
+    # max_level caps the number of brackets
+    g1 = dict((t, v) for t, v in build_multigap_groups(indexed, cadence_minutes=10, max_level=1))
+    assert all(len(v) == 1 for v in g1.values())
+
+
 def test_unet_vfi_is_t_conditioned():
     """t must actually change the output (it's an input feature, not just a post-hoc flow scale)."""
     torch = pytest.importorskip("torch")

@@ -39,6 +39,12 @@ anytime:                            # arbitrary-time (time-conditioned) training
   gap_levels: 3                     # number of gap sizes (granules); spans = base,2·base,3·base where
                                     # base = (1/time_step)·cadence (so every grid t lands on a real frame)
 
+multigap:                           # temporal multi-granularity — ONE target reconstructed from several
+                                    # SYMMETRIC brackets at t=0.5, with a combined loss (consistency across gaps)
+  enabled: false                    # pass --multigap to finetune to use the index's multigap groups
+  levels: 2                         # max symmetric bracket level per target: L=1..levels uses (g-L, g+L).
+                                    # frame@10 -> (0,20); frame@20 -> (10,30),(0,40); cost ≈ L× per step
+
 selfsup_insat:
   enabled: true
   step_min: 30                      # triplets (00:00, 00:30, 01:00) -> predict 00:30

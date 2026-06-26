@@ -49,11 +49,11 @@ DATA_SETUP_SAMPLE = ("python data_setup.py --download goes --sample && "
 DATA_SETUP_FULL = ("python data_setup.py --download goes --start 2025-10-01 --end 2025-10-03 --max-gb 30 && "
                    "python data_setup.py --download himawari --start 2025-10-01 --end 2025-10-02 --max-gb 25 && "
                    "python data_setup.py --download insat --max-gb 25 && "
-                   # dense sources: quarter-time grid (enables the 7.5-min product), 3 gap sizes
-                   "python data_setup.py --build-index --source goes19 --step-min 10 --time-step 0.25 --gap-levels 3 && "
-                   "python data_setup.py --build-index --source himawari9 --step-min 10 --time-step 0.25 --gap-levels 3 && "
+                   # dense sources: quarter-time grid (enables the 7.5-min product), 3 gap sizes, 2 multigap levels
+                   "python data_setup.py --build-index --source goes19 --step-min 10 --time-step 0.25 --gap-levels 3 --multigap-levels 2 && "
+                   "python data_setup.py --build-index --source himawari9 --step-min 10 --time-step 0.25 --gap-levels 3 --multigap-levels 2 && "
                    # INSAT (30-min cadence): midpoint grid, 2 gap sizes (needs ≥1 day of frames)
-                   "python data_setup.py --build-index --source insat3dr --step-min 30 --time-step 0.5 --gap-levels 2")
+                   "python data_setup.py --build-index --source insat3dr --step-min 30 --time-step 0.5 --gap-levels 2 --multigap-levels 2")
 
 
 # ------------------------------------------------------------------ creds helpers

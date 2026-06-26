@@ -195,9 +195,10 @@ def download_insat(out: Path, max_gb: float = 50.0, sample_n: int | None = None,
 # triplet index
 # --------------------------------------------------------------------------------------------------
 def build_index(data_dir: Path, source: str, step_min: float, out_json: Path,
-                time_step: float = 0.5, gap_levels: int = 3) -> dict:
+                time_step: float = 0.5, gap_levels: int = 3, multigap_levels: int = 2) -> dict:
     sys.path.insert(0, str(ROOT))
-    from src.data.triplets import index_frames, build_triplets, build_leave_one_out, build_anytime_samples
+    from src.data.triplets import (index_frames, build_triplets, build_leave_one_out,
+                                    build_anytime_samples, build_multigap_groups)
     files = [p for p in data_dir.rglob("*") if p.suffix.lower() in (".nc", ".h5", ".hdf", ".hdf5")]
     indexed = index_frames(files, source)
     trips = build_triplets(indexed, step_min)
@@ -206,23 +207,30 @@ def build_index(data_dir: Path, source: str, step_min: float, out_json: Path,
     # is the source's frame spacing so grid points coincide with real frames.
     anytime = build_anytime_samples(indexed, cadence_minutes=step_min,
                                     time_step=time_step, gap_levels=gap_levels)
+    # temporal multi-granularity groups: same target supervised from symmetric brackets up to
+    # `multigap_levels` (combined midpoint loss). frame@10->(0,20); frame@20->(10,30),(0,40); ...
+    multigap = build_multigap_groups(indexed, cadence_minutes=step_min, max_level=multigap_levels)
     index = {
         "source": source,
         "step_min": step_min,
         "anytime_time_step": time_step,
         "anytime_gap_levels": gap_levels,
+        "multigap_levels": multigap_levels,
         "n_frames": len(indexed),
         "n_triplets": len(trips),
         "n_leave_one_out": len(loo),
         "n_anytime": len(anytime),
+        "n_multigap": len(multigap),
         "triplets": [[str(a), str(b), str(c)] for a, b, c in trips],
         "leave_one_out": [[str(a), str(b), str(c)] for a, b, c in loo],
         "anytime": [[str(a), str(b), str(c), t] for a, b, c, t in anytime],
+        "multigap": [[str(near), str(tgt), [[str(f), t] for f, t in views]] for near, tgt, views in multigap],
     }
     out_json.parent.mkdir(parents=True, exist_ok=True)
     out_json.write_text(json.dumps(index, indent=2), encoding="utf-8")
     print(f"[index] {source}: {len(indexed)} frames -> {len(trips)} triplets, {len(loo)} leave-one-out, "
-          f"{len(anytime)} arbitrary-time (dt={time_step}, gap_levels={gap_levels}) -> {out_json}")
+          f"{len(anytime)} arbitrary-time, {len(multigap)} multi-gap groups "
+          f"(dt={time_step}, gap_levels={gap_levels}) -> {out_json}")
     return index
 
 
@@ -267,6 +275,8 @@ def main() -> None:
     ap.add_argument("--time-step", type=float, default=0.5,
                     help="arbitrary-time t-grid spacing in (0,1); must divide 1. 0.5=midpoint only, 0.25=quarters")
     ap.add_argument("--gap-levels", type=int, default=3, help="number of gap sizes / granules (spans = base,2·base,…)")
+    ap.add_argument("--multigap-levels", type=int, default=2,
+                    help="temporal multi-granularity: max symmetric bracket level per target (the combined-loss levels)")
     ap.add_argument("--env", action="store_true", help="install GPU requirements (server)")
     ap.add_argument("--clone", nargs="?", const="all", help="clone deep-model repos into referred_clones/ "
                     "(all | rife | film | superslomo)")
@@ -297,7 +307,8 @@ def main() -> None:
         data_dir = (SAMPLES if (SAMPLES / args.source.replace('insat3dr', 'insat')).exists() else DATA)
         build_index(data_dir, args.source, args.step_min,
                     DATA / "index" / f"{args.source}_triplets.json",
-                    time_step=args.time_step, gap_levels=args.gap_levels)
+                    time_step=args.time_step, gap_levels=args.gap_levels,
+                    multigap_levels=args.multigap_levels)
         return
 
     ap.print_help()

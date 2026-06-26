@@ -139,6 +139,53 @@ def build_anytime_samples(
     return samples
 
 
+def build_multigap_groups(
+    indexed: list[tuple[datetime, Path]],
+    cadence_minutes: float,
+    max_level: int = 2,
+    tol_minutes: float = 2.0,
+) -> list[tuple[Path, list[tuple[Path, Path]]]]:
+    """Symmetric temporal multi-granularity groups: ONE target frame, several SYMMETRIC brackets.
+
+    For target frame `g`, granularity level L uses the symmetric bracket (frame[g−L·cadence],
+    frame[g+L·cadence]) whose midpoint is exactly `g` (so the interpolation time is always t=0.5).
+    Levels run L = 1 .. max_level, bounded by the sequence ends:
+        frame@10 -> only (0,20)            (no frame before 0, so level 1 only)
+        frame@20 -> (10,30) and (0,40)     (levels 1 and 2)
+        frame@30 -> (20,40) and (10,50)
+    The training step reconstructs the ONE target from every bracket and sums the losses, so the model
+    renders it consistently whether the gap is small (±1·cadence) or large (±max_level·cadence). This is
+    multi-granularity in TIME — a combined multi-gap loss at the midpoint — controlled by `max_level`.
+
+    Returns groups: (target_path, [(left_path, right_path), … up to max_level]).
+    """
+    tol = tol_minutes * 60
+    times = [t for t, _ in indexed]
+    paths = [p for _, p in indexed]
+    n = len(indexed)
+
+    def _at(g: int, offset_min: float):
+        """Index of a frame at times[g] + offset_min (offset may be negative), within tol, else None."""
+        target = times[g] + timedelta(minutes=offset_min)
+        for k in range(n):
+            if abs((times[k] - target).total_seconds()) <= tol:
+                return k
+        return None
+
+    groups: list[tuple[Path, list[tuple[Path, Path]]]] = []
+    for g in range(n):
+        views: list[tuple[Path, Path]] = []
+        for L in range(1, int(max_level) + 1):
+            left = _at(g, -L * cadence_minutes)
+            right = _at(g, +L * cadence_minutes)
+            if left is None or right is None:
+                break                                   # symmetric bracket doesn't fit -> stop widening
+            views.append((paths[left], paths[right]))
+        if views:                                       # any target with >=1 symmetric bracket (e.g. frame@10)
+            groups.append((paths[g], views))
+    return groups
+
+
 def build_leave_one_out(
     indexed: list[tuple[datetime, Path]],
     step_minutes: float,
