@@ -177,13 +177,22 @@ A **feature** = a piece of information the method gets to look at.
 |---|---|---|
 | Spectral bands | **1** thermal-IR band (~10 µm) | **1** thermal-IR band (~10 µm) |
 | Frames of context | 2 (before & after) | 2 (before & after) |
+| **Target time `t`** | implicit (always the midpoint) | **explicit input feature** (a "t-plane" channel) |
 | Motion model | hand-coded, assumes constant brightness + straight lines | **learned** motion field |
 | Occlusion / appearance change | **ignored** | **learned visibility mask** |
 | Knowledge of "what a cloud is" | none | learned from data |
 
-Key point: **we use the same raw inputs as the traditional method (one IR band, two frames)** — the
-gain comes from *learning* the motion + the appearance changes instead of *assuming* them. That's the
-honest, apples-to-apples improvement. The big future gains come from **adding more features** (next).
+**Is the time a feature?** *Now, yes.* Previously the model was only ever shown two frames and
+internally assumed it was rendering the exact midpoint (t=0.5); the time `t` was used only to *linearly
+scale* the predicted motion afterwards — a straight-line-motion assumption. We changed this: **`t` is now
+fed into the network as an extra input channel** (a constant "t-plane" the same size as the image). So
+the network actually *sees* which intermediate moment it must paint — t=0.25, 0.5, 0.75 … — and can bend
+the motion non-linearly for each one. **This is what makes a single model handle multiple granularities
+(30→15→7.5 min)** instead of faking the off-midpoint times. (See §9.G and Appendix A.3.)
+
+Key point: we still use the same *raw imagery* as the traditional method (one IR band, two frames) — the
+gain comes from *learning* the motion + appearance changes, and now from *telling the model the exact
+time it's interpolating*. The big future gains come from **adding more features** (next).
 
 ---
 
@@ -224,12 +233,47 @@ Geostationary imagers see **many channels**, not just one. Each adds physical in
 - Output not just images but **derived products** (cloud-top height/temperature motion) that forecasters
   use directly.
 
+### G. Multi-granularity, time-aware training **(implemented)**
+This is the upgrade that makes the **30 → 15 → 7.5 min** product trustworthy.
+
+**The problem it fixes.** A satellite gap has a *size* (20 min for GOES, 60 min for INSAT) and we may want
+*any* in-between time, not just the middle. If a model only ever trains on the midpoint, the quarter
+points (t=0.25, 0.75 — the 7.5-min frames) are pure extrapolation under a straight-line assumption.
+
+**What we do now (two ideas together):**
+1. **`t` is an input feature** (the t-plane from §8) — so one model can be *asked* for any time and answer
+   differently for each.
+2. **Variable-(gap, t) samples.** From a dense 10-min GOES/Himawari sequence the index builder
+   (`build_multigran`) forms training examples at several **span sizes** (20 / 40 / 60 min → different
+   motion magnitudes) and uses **every real interior frame** as the ground truth at its *true* fraction
+   `t = (t_gt − t0) / span`. A single 10-min run thus teaches t = ⅙, 0.25, ⅓, 0.5, ⅔, 0.75, ⅚ … all from
+   real frames. Turn it on with `build-index --levels 3` + `finetune … --multigran`.
+
+Why it matters: the model learns genuine **non-linear, any-time** interpolation across **a range of gap
+sizes**, which is exactly the GOES (20 min) → INSAT (60 min) jump the transfer has to survive.
+
+### After it interpolates 3 frames for a triplet — are they *fused*? (No — here's what really happens)
+Two different modes, neither "fuses" the three into one image:
+
+- **Interpolate tab, ×4 (t=0.25, 0.5, 0.75):** three **independent** forward passes from the *same* two
+  real frames, each asked for a different `t`. They are simply **placed in sequence**
+  `[t0 → 0.25 → 0.5 → 0.75 → t2]` to make a denser clip. No averaging, no fusion — each is its own render.
+- **Temporal Upscaling tab (30→15→7.5):** **recursive midpoint insertion.** Level 1 inserts the t=0.5
+  frame between each real pair (30→15). Level 2 runs again on the *now-denser* sequence, so each 7.5-min
+  frame is the midpoint between a real frame and a *previously synthesised* 15-min frame. It **chains**,
+  it doesn't fuse — and because it builds on its own output, errors can compound.
+
+**The payoff of §9.G:** with a time-aware model you can skip the recursion and interpolate t=0.25/0.75
+**directly from the two original frames** (no synthetic-frame feedback), which avoids that error
+compounding for the 7.5-min product. That's the concrete reason multi-granularity is worth it.
+
 ### Quick priority list
 1. **Train UNetVFI longer on more GOES/Himawari days** → it should pass the baselines. *(cheapest win)*
-2. **Add the water-vapour + split-window bands** → biggest physical accuracy gain.
-3. **Use 3+ frames of context** → captures rotation/acceleration.
-4. **Add a flow-consistency + temporal loss** → smoother, flicker-free animations.
-5. **(Stretch) diffusion refinement** → sharp clouds for extreme convective growth.
+2. **Multi-granularity, time-aware training** *(implemented — §9.G)* → trustworthy 7.5-min frames. **Retrain `weights/unet` once** (the network input changed from 2→3 channels, so old checkpoints must be re-trained).
+3. **Add the water-vapour + split-window bands** → biggest physical accuracy gain.
+4. **Use 3+ frames of context** → captures rotation/acceleration.
+5. **Add a flow-consistency + temporal loss** → smoother, flicker-free animations.
+6. **(Stretch) diffusion refinement** → sharp clouds for extreme convective growth.
 
 ---
 
@@ -510,11 +554,16 @@ crisp results.
 → This *visibility* idea is what we borrow for the mask `M`.
 
 ## A.3 Our custom UNetVFI — the exact operations
-1. **Input:** concatenate `I₀, I₂` → a 2-channel tensor.
+1. **Input (time-aware):** concatenate `I₀, I₂` **and a constant "t-plane"** `T[x,y] = t` → a **3-channel**
+   tensor. Feeding `t` *into* the network (not just using it to scale the flow afterwards) is what lets one
+   model render any intermediate time and underpins multi-granularity training (§9.G). `t` is a per-sample
+   value, so a batch can mix t = 0.25 / 0.5 / 0.75.
 2. **U-Net:** encoder `32→64→128→256` (each block halves resolution), decoder back up with **skip
    connections**; final 1×1 conv **head** outputs **5 channels** → `raw_a (2), raw_b (2), mask_logit (1)`
    (+ a parallel **source head** `S (1)` for the PINN).
 3. **Scale to time & activate:** `F_{t→0} = t·raw_a`, `F_{t→1} = (1−t)·raw_b`, `M = σ(mask_logit)`.
+   (The network already saw `t` in step 1, so this linear scaling is now just a helpful prior, not the
+   *only* way time enters — the encoder can bend the motion non-linearly per `t`.)
 4. **Warp (bilinear `grid_sample`):** `w₀ = warp(I₀, F_{t→0})`, `w₂ = warp(I₂, F_{t→1})`.
 5. **Blend:** `I_t = M ⊙ w₀ + (1−M) ⊙ w₂`, clamped to [0,1].
 6. **Training loss:** `L = Charbonnier(I_t, GT) + 0.1·gradient-L1 + 0.1·soft-census`

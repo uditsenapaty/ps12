@@ -92,6 +92,36 @@ def test_build_triplets_spacing():
     assert len(trips) == 3  # (0,1,2),(1,2,3),(2,3,4)
 
 
+def test_build_multigran_variable_t():
+    from datetime import datetime, timedelta
+    from src.data.triplets import build_multigran
+    base = datetime(2026, 6, 24, 0, 0)
+    indexed = [(base + timedelta(minutes=10 * i), f"f{i}.nc") for i in range(7)]  # 0..60 min
+    s = build_multigran(indexed, base_gap_minutes=20, levels=3)
+    assert len(s) > 0
+    times = {t for *_, t in s}
+    # the 30→15→7.5 product needs t = 0.25 / 0.5 / 0.75 — all must be produced
+    assert {0.25, 0.5, 0.75}.issubset(times)
+    for p0, p2, gt, t in s:            # every sample is well-formed and strictly interior
+        assert p0 != p2 and 0.0 < t < 1.0
+
+
+def test_unet_vfi_is_t_conditioned():
+    """t must actually change the output (it's an input feature, not just a post-hoc flow scale)."""
+    torch = pytest.importorskip("torch")
+    from src.models.unet_vfi import build_net
+    net = build_net()(base=8).eval()
+    i0, i1 = torch.rand(1, 1, 64, 64), torch.rand(1, 1, 64, 64)
+    with torch.no_grad():
+        a = net(i0, i1, 0.2)
+        b = net(i0, i1, 0.8)
+        assert a.shape == (1, 1, 64, 64)
+        assert float((a - b).abs().mean()) > 1e-4
+        # per-sample tensor t (multi-granularity batch) returns one prediction per item
+        pred = net(i0.repeat(3, 1, 1, 1), i1.repeat(3, 1, 1, 1), torch.tensor([0.25, 0.5, 0.75]))
+        assert pred.shape == (3, 1, 64, 64)
+
+
 # ---- real classical optical-flow interpolation ----------------------------------------------------
 def _texture(h=128, w=128):
     yy, xx = np.mgrid[0:h, 0:w]

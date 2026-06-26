@@ -36,6 +36,7 @@ class SatTripletDataset:
         self,
         index_json: str | Path | None = None,
         triplets: list[tuple[str, str, str]] | None = None,
+        samples: list[tuple[str, str, str, float]] | None = None,
         source: str = "goes19",
         patch: int = 256,
         bt_min: float = BT_MIN_DEFAULT,
@@ -44,14 +45,23 @@ class SatTripletDataset:
         min_valid_frac: float = 0.5,
         seed: int = 1234,
         crop_frac: float = 0.35,
+        multigran: bool = False,
     ):
-        if triplets is None:
+        if samples is None and triplets is None:
             if index_json is None:
-                raise ValueError("provide either index_json or triplets")
+                raise ValueError("provide index_json, triplets, or samples")
             data = json.loads(Path(index_json).read_text(encoding="utf-8"))
-            triplets = data["triplets"]
             source = data.get("source", source)
-        self.triplets = [tuple(t) for t in triplets]
+            if multigran and data.get("multigran"):
+                samples = data["multigran"]
+            else:
+                triplets = data["triplets"]
+        # Canonical sample = (I0_path, I1_path, GT_path, t). Triplets (t0, t_mid, t2) map to t=0.5 with
+        # I0=t0, I1=t2, GT=t_mid; multigran rows are already (t0, t2, gt, t).
+        if samples is not None:
+            self.samples = [(str(s[0]), str(s[1]), str(s[2]), float(s[3])) for s in samples]
+        else:
+            self.samples = [(str(t[0]), str(t[2]), str(t[1]), 0.5) for t in triplets]
         self.source = source
         self.patch = patch
         self.bt_min, self.bt_max = bt_min, bt_max
@@ -61,7 +71,7 @@ class SatTripletDataset:
         self.rng = np.random.default_rng(seed)
 
     def __len__(self) -> int:
-        return len(self.triplets)
+        return len(self.samples)
 
     def _sample_patch(self, a: np.ndarray, b: np.ndarray, c: np.ndarray):
         h, w = a.shape
@@ -90,15 +100,15 @@ class SatTripletDataset:
         return tuple(out)
 
     def __getitem__(self, i: int):
-        p0, p1, p2 = self.triplets[i]
-        a = _read_norm(str(p0), self.source, self.bt_min, self.bt_max, self.crop_frac)
-        b = _read_norm(str(p1), self.source, self.bt_min, self.bt_max, self.crop_frac)
-        c = _read_norm(str(p2), self.source, self.bt_min, self.bt_max, self.crop_frac)
-        a, b, c = self._sample_patch(a, b, c)
+        p0, p2, pgt, t = self.samples[i]            # I0, I1 (other end), GT (interior frame), time t
+        a = _read_norm(p0, self.source, self.bt_min, self.bt_max, self.crop_frac)   # I0
+        c = _read_norm(p2, self.source, self.bt_min, self.bt_max, self.crop_frac)   # I1
+        b = _read_norm(pgt, self.source, self.bt_min, self.bt_max, self.crop_frac)  # GT
+        a, b, c = self._sample_patch(a, b, c)       # validity is checked on the GT (b)
         a, b, c = self._augment(a, b, c)
         try:
             import torch
             to = lambda x: torch.from_numpy(x).float()[None]  # (1, H, W)
-            return {"I0": to(a), "GT": to(b), "I1": to(c), "t": 0.5}
+            return {"I0": to(a), "GT": to(b), "I1": to(c), "t": float(t)}
         except Exception:
-            return {"I0": a[None], "GT": b[None], "I1": c[None], "t": 0.5}
+            return {"I0": a[None], "GT": b[None], "I1": c[None], "t": float(t)}

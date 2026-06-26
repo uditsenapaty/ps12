@@ -77,6 +77,50 @@ def build_triplets(
     return triplets
 
 
+def build_multigran(
+    indexed: list[tuple[datetime, Path]],
+    base_gap_minutes: float,
+    levels: int = 3,
+    tol_minutes: float = 2.0,
+) -> list[tuple[Path, Path, Path, float]]:
+    """Variable-gap, variable-t samples (t0, t2, gt, t) for granularity-aware training.
+
+    For each anchor frame and each level L in 1..levels, the input span is L*base_gap_minutes; EVERY
+    real interior frame becomes a ground-truth target at its true fraction t = (t_gt - t0) / span.
+    Dense 10-min GOES/Himawari therefore teach the model many gaps (motion magnitudes) AND many
+    times t — exactly what the 30→15→7.5 product needs (t=0.25 / 0.5 / 0.75), instead of only the
+    t=0.5 midpoint with a linear-motion assumption.
+
+    e.g. base_gap=20, levels=3 on a 10-min sequence -> spans 20/40/60 min:
+      span 20 -> t=0.5 ; span 40 -> t=0.25,0.5,0.75 ; span 60 -> t=1/6..5/6.
+    """
+    samples: list[tuple[Path, Path, Path, float]] = []
+    tol = tol_minutes * 60
+    n = len(indexed)
+    for i in range(n):
+        t0, p0 = indexed[i]
+        for L in range(1, int(levels) + 1):
+            span = base_gap_minutes * 60 * L
+            j = None
+            for k in range(i + 1, n):
+                dt = (indexed[k][0] - t0).total_seconds()
+                if abs(dt - span) <= tol:
+                    j = k
+                    break
+                if dt > span + tol:
+                    break
+            if j is None:
+                continue
+            t2, p2 = indexed[j]
+            actual = (t2 - t0).total_seconds()
+            for g in range(i + 1, j):
+                tg = (indexed[g][0] - t0).total_seconds()
+                if tg <= 0 or tg >= actual:
+                    continue
+                samples.append((p0, p2, indexed[g][1], round(tg / actual, 4)))
+    return samples
+
+
 def build_leave_one_out(
     indexed: list[tuple[datetime, Path]],
     step_minutes: float,

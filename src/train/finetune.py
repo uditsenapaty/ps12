@@ -38,7 +38,7 @@ def validate(net, ds, device, n: int = 8) -> dict:
             i0 = b["I0"][None].to(device)
             i1 = b["I1"][None].to(device)
             gt = b["GT"].numpy()[0]
-            pred = net(i0, i1, 0.5)[0, 0].cpu().numpy()
+            pred = net(i0, i1, float(b["t"]))[0, 0].cpu().numpy()  # score at the sample's true t
             ps.append(psnr(pred, gt))
             ss.append(ssim(pred, gt))
     net.train()
@@ -48,13 +48,15 @@ def validate(net, ds, device, n: int = 8) -> dict:
 def train(index: str, out: str, steps: int = 20000, lr: float = 1e-4, batch: int = 8,
           patch: int = 256, base: int = 32, device: str | None = None, val_index: str | None = None,
           val_every: int = 500, workers: int = 0, init_weights: str | None = None,
-          pinn: bool = False, pinn_weight: float = 0.1) -> Path:
+          pinn: bool = False, pinn_weight: float = 0.1, multigran: bool = False) -> Path:
     import torch
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-    ds = SatTripletDataset(index_json=index, patch=patch)
-    val_ds = SatTripletDataset(index_json=val_index or index, patch=patch, augment=False)
+    ds = SatTripletDataset(index_json=index, patch=patch, multigran=multigran)
+    val_ds = SatTripletDataset(index_json=val_index or index, patch=patch, augment=False, multigran=multigran)
+    if multigran:
+        print(f"[train] multi-granularity ON: {len(ds)} variable-(gap,t) samples")
     if len(ds) == 0:
-        raise RuntimeError(f"No triplets in {index}. Download more frames "
+        raise RuntimeError(f"No samples in {index}. Download more frames "
                            f"(e.g. `python data_setup.py --download goes --max-gb 5`) then rebuild the index.")
     eff_batch = max(1, min(batch, len(ds)))
     loader = _loader(ds, eff_batch, shuffle=True, workers=workers)
@@ -75,11 +77,12 @@ def train(index: str, out: str, steps: int = 20000, lr: float = 1e-4, batch: int
     while step < steps:
         for b in loader:
             i0, gt, i1 = b["I0"].to(device), b["GT"].to(device), b["I1"].to(device)
+            t = b["t"].to(device).float()          # per-sample time (0.5 for plain triplets)
             if pinn:
-                pred, f_t0, f_t1, _mask, source = net(i0, i1, 0.5, return_aux=True)
+                pred, f_t0, f_t1, _mask, source = net(i0, i1, t, return_aux=True)
                 loss = combined_loss(pred, gt) + pinn_weight * advection_physics_loss(i0, i1, f_t0, f_t1, source)
             else:
-                pred = net(i0, i1, 0.5)
+                pred = net(i0, i1, t)
                 loss = combined_loss(pred, gt)
             opt.zero_grad(); loss.backward(); opt.step(); sched.step()
             step += 1
@@ -133,10 +136,12 @@ def main():
     ap.add_argument("--init", default=None, help="warm-start weights (.pt)")
     ap.add_argument("--pinn", action="store_true", help="add the physics-informed (advection) loss")
     ap.add_argument("--pinn-weight", type=float, default=0.1)
+    ap.add_argument("--multigran", action="store_true",
+                    help="train on the variable-(gap,t) multi-granularity samples (30→15→7.5 ready)")
     a = ap.parse_args()
     train(a.index, a.out, a.steps, a.lr, a.batch, a.patch, a.base, a.device, a.val_index,
           val_every=a.val_every, workers=a.workers, init_weights=a.init,
-          pinn=a.pinn, pinn_weight=a.pinn_weight)
+          pinn=a.pinn, pinn_weight=a.pinn_weight, multigran=a.multigran)
 
 
 if __name__ == "__main__":

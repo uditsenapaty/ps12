@@ -318,9 +318,14 @@ irframe(sl, 0.55, 2.45, 0.62, 0.5)
 tb(sl, 0.55, 2.96, 0.62, 0.18, [{"t": "I₀", "s": 9, "c": INK, "b": True, "align": PP_ALIGN.CENTER}], align=PP_ALIGN.CENTER)
 irframe(sl, 0.55, 3.15, 0.62, 0.5)
 tb(sl, 0.55, 3.66, 0.62, 0.18, [{"t": "I₂", "s": 9, "c": INK, "b": True, "align": PP_ALIGN.CENTER}], align=PP_ALIGN.CENTER)
+# t-plane: the target time t fed in as a 3rd input channel (granularity-aware / multi-t)
+rect(sl, 0.55, 3.9, 0.62, 0.32, TEAL, radius=0.1)
+settext(sl.shapes[-1], [{"t": "t-plane", "s": 7.5, "c": WHITE, "b": True, "align": PP_ALIGN.CENTER}], align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
 rect(sl, 1.3, 2.72, 0.58, 0.66, NAVY, radius=0.12)
-settext(sl.shapes[-1], [{"t": "concat", "s": 8.5, "c": WHITE, "b": True, "align": PP_ALIGN.CENTER}], align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
-conn(sl, 1.17, 2.7, 1.34, 2.9, MUTE, w=1.0); conn(sl, 1.17, 3.4, 1.34, 3.2, MUTE, w=1.0)
+settext(sl.shapes[-1], [{"t": "concat", "s": 8.5, "c": WHITE, "b": True, "sa": 0, "align": PP_ALIGN.CENTER},
+        {"t": "3 ch", "s": 7, "c": WHITE, "align": PP_ALIGN.CENTER}], align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
+conn(sl, 1.17, 2.7, 1.34, 2.9, MUTE, w=1.0); conn(sl, 1.17, 3.4, 1.34, 3.1, MUTE, w=1.0)
+conn(sl, 1.17, 4.05, 1.34, 3.3, TEAL, w=1.0, dash="dash")   # t-plane -> concat
 # encoder (down-step) E1..E4
 encx = [2.15, 2.9, 3.65, 4.4]; ench = [1.5, 1.15, 0.85, 0.6]
 encmeta = [("32", "256²"), ("64", "128²"), ("128", "64²"), ("256", "32²")]
@@ -370,6 +375,9 @@ tb(sl, 0.75, 4.55, 8.7, 0.85, [
     {"runs": [{"t": "Physics-informed (PINN, training):  ", "s": 9.5, "c": TEAL, "b": True},
               {"t": "advection ∂I/∂t + u·grad(I) = S — source S models cloud growth; +0.12 PSNR measured.",
                "s": 9.5, "c": SLATE}], "sa": 2},
+    {"runs": [{"t": "Time-aware & multi-granularity:  ", "s": 9.5, "c": TEAL, "b": True},
+              {"t": "target time t is an input channel; trained on variable (gap, t) samples → one model "
+                    "does 30→15→7.5 min (t=0.25/0.5/0.75), not just the midpoint.", "s": 9.5, "c": SLATE}], "sa": 2},
     {"runs": [{"t": "~2–5M params · trains on a T4 in hours · self-supervised on INSAT · "
                     "Local → GitHub → Lightning T4 → Streamlit.", "s": 9, "c": SLATE}]}])
 

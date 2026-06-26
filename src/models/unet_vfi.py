@@ -47,10 +47,15 @@ def build_net():
             return self.c(torch.cat([x, skip], 1))
 
     class UNetVFINet(nn.Module):
-        """Predicts (flow_t0[2], flow_t1[2], mask[1]) from concat(I0, I1) and warps to time t."""
+        """Predicts (flow_t0[2], flow_t1[2], mask[1]) from concat(I0, I1, t-plane) and warps to time t.
+
+        t-conditioned: the target time t is fed in as a constant input channel (a "t-plane"), so the
+        network *sees* which intermediate time it must synthesise — this is what lets one model handle
+        multiple granularities (t=0.25 / 0.5 / 0.75 for 30→15→7.5) rather than assuming linear motion.
+        """
         def __init__(self, base: int = 32):
             super().__init__()
-            self.inc = nn.Sequential(conv(2, base), conv(base, base))
+            self.inc = nn.Sequential(conv(3, base), conv(base, base))   # I0, I1, t-plane (granularity-aware)
             self.d1 = Down(base, base * 2)
             self.d2 = Down(base * 2, base * 4)
             self.d3 = Down(base * 4, base * 8)
@@ -70,8 +75,19 @@ def build_net():
             vgrid[:, 1] = 2.0 * vgrid[:, 1] / max(H - 1, 1) - 1.0
             return F.grid_sample(img, vgrid.permute(0, 2, 3, 1), mode="bilinear", padding_mode="border", align_corners=True)
 
+        @staticmethod
+        def _t_tensor(t, ref):
+            """t -> (B,1,1,1) tensor on ref's device/dtype. Accepts a python float (same t for the whole
+            batch) or a per-sample tensor of shape (B,) — so multi-granularity batches mix different t."""
+            B = ref.shape[0]
+            if torch.is_tensor(t):
+                return t.to(device=ref.device, dtype=ref.dtype).reshape(B, 1, 1, 1)
+            return torch.full((B, 1, 1, 1), float(t), device=ref.device, dtype=ref.dtype)
+
         def forward(self, i0, i1, t: float = 0.5, return_aux: bool = False):
-            x0 = self.inc(torch.cat([i0, i1], 1))
+            tt = self._t_tensor(t, i0)                                    # (B,1,1,1)
+            tplane = tt.expand(i0.shape[0], 1, i0.shape[-2], i0.shape[-1])  # t as a full-res input feature
+            x0 = self.inc(torch.cat([i0, i1, tplane], 1))
             x1 = self.d1(x0)
             x2 = self.d2(x1)
             x3 = self.d3(x2)
@@ -79,8 +95,8 @@ def build_net():
             y = self.u2(y, x1)
             y = self.u1(y, x0)
             out = self.head(y)
-            f_t0 = out[:, 0:2] * t
-            f_t1 = out[:, 2:4] * (1 - t)
+            f_t0 = out[:, 0:2] * tt
+            f_t1 = out[:, 2:4] * (1 - tt)
             mask = torch.sigmoid(out[:, 4:5])
             w0 = self._warp(i0, f_t0)
             w1 = self._warp(i1, f_t1)

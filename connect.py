@@ -32,15 +32,26 @@ ENV_LOCAL = ROOT / ".env.local"
 sys.path.insert(0, str(ROOT))
 from src.data.env import load_env  # noqa: E402
 
-# readiness probes run on the remote persistent storage (a server that completed walkthrough.md)
-DATA_PROBE = "ls data/*/* >/dev/null 2>&1 || ls samples/*/* >/dev/null 2>&1"
+# readiness probes run on the remote persistent storage (a server that completed walkthrough.md).
+# MANDATORY data: GOES-19 AND Himawari-9 present, plus at least ~1 day of INSAT-3DS/3DR
+# (48 frames at 30-min cadence) so the INSAT self-supervised triplets + leave-one-out eval are real.
+GOES_MIN, HIMA_MIN, INSAT_MIN = 3, 10, 48  # INSAT_MIN = 48 = one full day at 30-min cadence
+DATA_PROBE = (
+    f"[ $(ls data/goes19/*.nc 2>/dev/null | wc -l) -ge {GOES_MIN} ] && "
+    f"[ $(ls data/himawari9/* 2>/dev/null | wc -l) -ge {HIMA_MIN} ] && "
+    f"[ $(ls data/insat/*.h5 data/insat/*.hdf5 2>/dev/null | wc -l) -ge {INSAT_MIN} ]")
 CKPT_PROBE = "ls weights/unet*/*.pt >/dev/null 2>&1 || ls weights/rife_ft/* >/dev/null 2>&1"
 READY_PROBE = f"cd ps12 2>/dev/null && (( {DATA_PROBE} ) && ( {CKPT_PROBE} ) && echo PS12_READY || echo PS12_NOTREADY)"
-DATA_SETUP_SAMPLE = "python data_setup.py --download goes --sample && python data_setup.py --download insat --sample"
+DATA_SETUP_SAMPLE = ("python data_setup.py --download goes --sample && "
+                     "python data_setup.py --download himawari --sample && "
+                     "python data_setup.py --download insat --sample")
+# Full bootstrap: GOES + Himawari (mandatory) + ≥1 day INSAT, then multi-granularity indices for all 3.
 DATA_SETUP_FULL = ("python data_setup.py --download goes --start 2025-10-01 --end 2025-10-03 --max-gb 30 && "
                    "python data_setup.py --download himawari --start 2025-10-01 --end 2025-10-02 --max-gb 25 && "
                    "python data_setup.py --download insat --max-gb 25 && "
-                   "python data_setup.py --build-index --source goes19 --step-min 10")
+                   "python data_setup.py --build-index --source goes19 --step-min 10 --levels 3 && "
+                   "python data_setup.py --build-index --source himawari9 --step-min 10 --levels 3 && "
+                   "python data_setup.py --build-index --source insat3dr --step-min 30 --levels 2")
 
 
 # ------------------------------------------------------------------ creds helpers
@@ -123,9 +134,10 @@ def connect_lightning(do_train: bool, full_data: bool, do_serve: bool = False, b
     # the server must already have data + trained checkpoints (i.e. walkthrough.md was completed)
     status = studio.run(READY_PROBE)
     if "PS12_READY" not in status:
-        print("[lightning] ✗ Studio is NOT ready — missing dataset and/or trained checkpoints in")
-        print("            persistent storage. Complete walkthrough.md on the Studio first (data_setup")
-        print("            + training), or re-run with --bootstrap (--train) to set it up. Probe said:")
+        print("[lightning] ✗ Studio is NOT ready. MANDATORY data: GOES-19 + Himawari-9 both present,")
+        print(f"            and ≥1 day of INSAT-3DS/3DR (≥{INSAT_MIN} frames at 30-min cadence) — plus a")
+        print("            trained checkpoint. INSAT must be ordered on MOSDAC first (see walkthrough.md);")
+        print("            then re-run with --bootstrap --full-data (--train) to set it up. Probe said:")
         print("           ", (status.strip().splitlines() or ["<no output>"])[-1])
         if not (do_train or bootstrap):
             studio.stop() if False else None
