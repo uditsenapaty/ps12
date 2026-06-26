@@ -275,8 +275,8 @@ def main() -> None:
     ap.add_argument("--time-step", type=float, default=0.5,
                     help="arbitrary-time t-grid spacing in (0,1); must divide 1. 0.5=midpoint only, 0.25=quarters")
     ap.add_argument("--gap-levels", type=int, default=3, help="number of gap sizes / granules (spans = base,2·base,…)")
-    ap.add_argument("--multigap-levels", type=int, default=2,
-                    help="temporal multi-granularity: max symmetric bracket level per target (the combined-loss levels)")
+    ap.add_argument("--multigap-levels", type=int, default=1,
+                    help="temporal multi-granularity: max symmetric bracket level per target (1 = plain midpoint)")
     ap.add_argument("--env", action="store_true", help="install GPU requirements (server)")
     ap.add_argument("--clone", nargs="?", const="all", help="clone deep-model repos into referred_clones/ "
                     "(all | rife | film | superslomo)")

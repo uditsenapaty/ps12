@@ -34,16 +34,16 @@ train:
 anytime:                            # arbitrary-time (time-conditioned) training — opt-in & tunable (it
                                     # multiplies sample count / training time, so configure per budget)
   enabled: true                     # pass --anytime to finetune to use the index's arbitrary-time samples
-  time_step: 0.25                   # t-grid spacing in (0,1); MUST divide 1. 0.5 = midpoint only (cheapest);
-                                    # 0.25 = t{0.25,0.5,0.75} (needed for 7.5-min); 0.2 = {0.2,0.4,0.6,0.8}
+  time_step: 0.5                    # t-grid spacing in (0,1); MUST divide 1. 0.5 = midpoint only (default);
+                                    # 0.25 = t{0.25,0.5,0.75} (needed for direct 7.5-min); 0.2 = {0.2,0.4,0.6,0.8}
   gap_levels: 3                     # number of gap sizes (granules); spans = base,2·base,3·base where
                                     # base = (1/time_step)·cadence (so every grid t lands on a real frame)
 
 multigap:                           # temporal multi-granularity — ONE target reconstructed from several
                                     # SYMMETRIC brackets at t=0.5, with a combined loss (consistency across gaps)
   enabled: false                    # pass --multigap to finetune to use the index's multigap groups
-  levels: 2                         # max symmetric bracket level per target: L=1..levels uses (g-L, g+L).
-                                    # frame@10 -> (0,20); frame@20 -> (10,30),(0,40); cost ≈ L× per step
+  levels: 1                         # max symmetric bracket level per target: L=1..levels uses (g-L, g+L).
+                                    # levels=1 -> plain midpoint triplet; levels=2 -> (10,30)+(0,40); cost ≈ L× per step
 
 selfsup_insat:
   enabled: true
