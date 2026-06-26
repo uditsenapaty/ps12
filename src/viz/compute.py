@@ -128,9 +128,9 @@ class LightningBackend:
         self._studio = get_studio()
         try:
             self._ensure_running()
-        except Exception as e:
+        except Exception:
             self._studio = None
-            return f"Connect failed while starting the Studio: {e}"
+            raise  # let the dashboard's try/except show the clean error and NOT store a dead backend
         return self._studio.run("cd ~/ps12 2>/dev/null; echo CONNECTED $(nvidia-smi -L 2>/dev/null | head -1)")
 
     def available(self) -> bool:

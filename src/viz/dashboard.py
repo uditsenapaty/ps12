@@ -147,9 +147,11 @@ with st.sidebar:
     st.divider()
     if st.button("💳 GPU rate & balance", key="btn_rates", use_container_width=True):
         try:
-            from cloud.lightning_exec import rates_and_balance
+            import importlib
+            import cloud.lightning_exec as _lx
+            importlib.reload(_lx)  # Streamlit caches submodules; reload picks up rates_and_balance live
             with st.spinner("Querying Lightning billing…"):
-                st.session_state["rates"] = rates_and_balance("T4")
+                st.session_state["rates"] = _lx.rates_and_balance("T4")
         except Exception as e:
             st.session_state["rates"] = {"error": str(e), "machines": [], "balance": None, "total_spent": None}
     _rates = st.session_state.get("rates")
