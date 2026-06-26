@@ -96,7 +96,8 @@ def read_goes_nc(path: str | Path, source: str = "goes19", with_lonlat: bool = F
         bc1 = float(ds["planck_bc1"].values)
         bc2 = float(ds["planck_bc2"].values)
         bt = radiance_to_bt_goes(rad, fk1, fk2, bc1, bc2)
-        band_id = int(ds["band_id"].values) if "band_id" in ds else -1
+        # .ravel()[0] so it works whether band_id is 0-d or shape (1,) (numpy 2.x rejects int() on 1-d)
+        band_id = int(ds["band_id"].values.ravel()[0]) if "band_id" in ds else -1
         lats = lons = None
         if with_lonlat:
             lats, lons = goes_fixed_grid_lonlat(ds)
