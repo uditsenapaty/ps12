@@ -154,13 +154,18 @@ def download_himawari(start: datetime, end: datetime, out: Path, band: str = "B1
 # INSAT (MOSDAC SFTP via paramiko — cross-platform; lftp recipe in walkthrough.md for the server)
 # --------------------------------------------------------------------------------------------------
 def download_insat(out: Path, max_gb: float = 50.0, sample_n: int | None = None,
-                   remote_dir: str = MOSDAC_REMOTE) -> list[Path]:
+                   remote_dir: str = MOSDAC_REMOTE, start: datetime | None = None,
+                   end: datetime | None = None) -> list[Path]:
     import paramiko  # noqa
     sys.path.insert(0, str(ROOT))
     from src.data.env import mosdac_credentials
+    from src.data.triplets import parse_timestamp
     user, pwd = mosdac_credentials()
     out.mkdir(parents=True, exist_ok=True)
     got: list[Path] = []
+    if start or end:
+        print(f"[insat] window {start.date() if start else '…'} → {end.date() if end else '…'} "
+              "(filtering /Order by filename date)")
 
     transport = paramiko.Transport((MOSDAC_HOST, MOSDAC_PORT))
     transport.connect(username=user, password=pwd)
@@ -176,7 +181,15 @@ def download_insat(out: Path, max_gb: float = 50.0, sample_n: int | None = None,
                     yield rpath, entry.st_size
 
         for rpath, size in walk(remote_dir):
-            dest = out / Path(rpath).name
+            name = Path(rpath).name
+            if start or end:                      # keep only files inside the requested date window
+                try:
+                    ts = parse_timestamp(name, "insat3dr")
+                except ValueError:
+                    continue
+                if (start and ts.date() < start.date()) or (end and ts.date() > end.date()):
+                    continue
+            dest = out / name
             if not dest.exists():
                 if _dir_size_gb(out) > max_gb:
                     print(f"[insat] max-gb {max_gb} reached, stopping."); break
@@ -299,7 +312,10 @@ def main() -> None:
         elif args.download == "himawari":
             files = download_himawari(start, end, base / "himawari9", max_gb=args.max_gb, sample_n=sample_n)
         else:
-            files = download_insat(base / "insat", max_gb=args.max_gb, sample_n=sample_n)
+            # INSAT filters its /Order by date only when --start/--end are given (else pulls the whole order)
+            ins_s = datetime.strptime(args.start, "%Y-%m-%d") if args.start else None
+            ins_e = datetime.strptime(args.end, "%Y-%m-%d") if args.end else None
+            files = download_insat(base / "insat", max_gb=args.max_gb, sample_n=sample_n, start=ins_s, end=ins_e)
         print(f"[done] {len(files)} files in {base / args.download}")
         return
 

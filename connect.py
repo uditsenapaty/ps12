@@ -45,10 +45,11 @@ READY_PROBE = f"cd ps12 2>/dev/null && (( {DATA_PROBE} ) && ( {CKPT_PROBE} ) && 
 DATA_SETUP_SAMPLE = ("python data_setup.py --download goes --sample && "
                      "python data_setup.py --download himawari --sample && "
                      "python data_setup.py --download insat --sample")
-# Full bootstrap: GOES + Himawari (mandatory) + ≥1 day INSAT, then arbitrary-time indices for all 3.
-DATA_SETUP_FULL = ("python data_setup.py --download goes --start 2025-10-01 --end 2025-10-03 --max-gb 30 && "
-                   "python data_setup.py --download himawari --start 2025-10-01 --end 2025-10-02 --max-gb 25 && "
-                   "python data_setup.py --download insat --max-gb 25 && "
+# Full bootstrap: ONE 1-day window per satellite (2026-06-24). INSAT 24 Jun is within the MOSDAC order
+# (17–24 Jun 2026); GOES/Himawari pull the same day from their open AWS buckets.
+DATA_SETUP_FULL = ("python data_setup.py --download goes --start 2026-06-24 --end 2026-06-24 --max-gb 10 && "
+                   "python data_setup.py --download himawari --start 2026-06-24 --end 2026-06-24 --max-gb 20 && "
+                   "python data_setup.py --download insat --start 2026-06-24 --end 2026-06-24 --max-gb 8 && "
                    # default for now: midpoint grid (dt=0.5), multigap level 1. Bump --time-step 0.25 /
                    # --multigap-levels 2 later for direct 7.5-min + gap-consistency.
                    "python data_setup.py --build-index --source goes19 --step-min 10 --time-step 0.5 --gap-levels 3 --multigap-levels 1 && "
