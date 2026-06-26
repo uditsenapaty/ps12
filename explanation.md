@@ -187,8 +187,9 @@ internally assumed it was rendering the exact midpoint (t=0.5); the time `t` was
 scale* the predicted motion afterwards — a straight-line-motion assumption. We changed this: **`t` is now
 fed into the network as an extra input channel** (a constant "t-plane" the same size as the image). So
 the network actually *sees* which intermediate moment it must paint — t=0.25, 0.5, 0.75 … — and can bend
-the motion non-linearly for each one. **This is what makes a single model handle multiple granularities
-(30→15→7.5 min)** instead of faking the off-midpoint times. (See §9.G and Appendix A.3.)
+the motion non-linearly for each one. **This is what enables arbitrary-time interpolation — one model
+that renders any moment (30→15→7.5 min)** instead of faking the off-midpoint times. (See §9.G and
+Appendix A.3.)
 
 Key point: we still use the same *raw imagery* as the traditional method (one IR band, two frames) — the
 gain comes from *learning* the motion + appearance changes, and now from *telling the model the exact
@@ -233,21 +234,49 @@ Geostationary imagers see **many channels**, not just one. Each adds physical in
 - Output not just images but **derived products** (cloud-top height/temperature motion) that forecasters
   use directly.
 
-### G. Multi-granularity, time-aware training **(implemented)**
+### G. Arbitrary-time (time-conditioned) training **(implemented)**
 This is the upgrade that makes the **30 → 15 → 7.5 min** product trustworthy.
+
+> **A note on naming.** This is *arbitrary-time* (a.k.a. continuous-time / any-time) interpolation
+> training, **not** "multi-granularity" in the multi-scale sense. Each `(gap, t)` row is an
+> **independent** training sample with its own loss — there is no joint multi-scale loss tying one
+> point across granularities. "Multi-scale / multi-granularity" properly means a **spatial pyramid
+> loss** (`α·L_fine + β·L_coarse`), which is a *separate* idea (see §9.E "loss functions" — not built
+> here yet). The variable **gap sizes** below are just a *multi-rate augmentation* (different motion
+> magnitudes), not a multi-scale loss.
 
 **The problem it fixes.** A satellite gap has a *size* (20 min for GOES, 60 min for INSAT) and we may want
 *any* in-between time, not just the middle. If a model only ever trains on the midpoint, the quarter
 points (t=0.25, 0.75 — the 7.5-min frames) are pure extrapolation under a straight-line assumption.
 
 **What we do now (two ideas together):**
-1. **`t` is an input feature** (the t-plane from §8) — so one model can be *asked* for any time and answer
-   differently for each.
-2. **Variable-(gap, t) samples.** From a dense 10-min GOES/Himawari sequence the index builder
-   (`build_multigran`) forms training examples at several **span sizes** (20 / 40 / 60 min → different
-   motion magnitudes) and uses **every real interior frame** as the ground truth at its *true* fraction
-   `t = (t_gt − t0) / span`. A single 10-min run thus teaches t = ⅙, 0.25, ⅓, 0.5, ⅔, 0.75, ⅚ … all from
-   real frames. Turn it on with `build-index --levels 3` + `finetune … --multigran`.
+1. **`t` is an input feature** (the t-plane from §8). On its own this does nothing — it only matters
+   *because* of (2). It's the prerequisite that lets one model be *asked* for any time.
+2. **Configurable t-grid × gap granules (the actual capability).** From a dense sequence the index
+   builder (`build_anytime_samples`) emits training samples on a **t-grid** of spacing `time_step (dt)`
+   across **`gap_levels` gap sizes**, using **real frames** as the ground truth.
+
+**Configurable, because variable-`t` training is expensive** (`configs/default.yaml → anytime`, or
+`data_setup --time-step / --gap-levels`):
+- `time_step = 0.5` → train **only the midpoint** (t=0.5) — cheapest.
+- `time_step = 0.25` → t ∈ {0.25, 0.5, 0.75} — needed for the **7.5-min** product.
+- `time_step = 0.2` → {0.2, 0.4, 0.6, 0.8}, etc. **`dt` must evenly divide 1** (so the grid tiles [0,1]).
+- `gap_levels = N` → N gap sizes (different motion magnitudes). The **base span is `(1/dt)·cadence`**,
+  chosen so **every grid time lands exactly on a real frame**; spans = base, 2·base, …, N·base.
+
+**Why the grid (and a subtlety you'd otherwise hit):** because the target must be a *real* frame, you
+**can't sample arbitrary (span, t) pairs** — e.g. with `dt=0.5` a 40-min span uses the frame at **+20**
+(t=0.5); the frame at +10 is **off-grid and skipped**. Choosing `base = (1/dt)·cadence` guarantees the
+grid points always coincide with real frames, so nothing is wasted; positions near the start/end where a
+span doesn't fit are simply dropped.
+
+**Loss / balance setup.** Each sample is trained at its **own true `t`** (the loss is the same
+Charbonnier + gradient + census, computed against that frame; PINN composes on top). The grid keeps it
+**balanced**: every gap level contributes the same `(1/dt − 1)` grid points per anchor, and `t` is
+spread uniformly over [0,1] — so no single time or gap dominates the gradient. (A *multi-scale* pyramid
+loss — §9.E — is the orthogonal next step if we want it.)
+
+Turn it on: `data_setup --build-index --time-step 0.25 --gap-levels 3` then `finetune … --anytime`.
 
 Why it matters: the model learns genuine **non-linear, any-time** interpolation across **a range of gap
 sizes**, which is exactly the GOES (20 min) → INSAT (60 min) jump the transfer has to survive.
@@ -263,13 +292,13 @@ Two different modes, neither "fuses" the three into one image:
   frame is the midpoint between a real frame and a *previously synthesised* 15-min frame. It **chains**,
   it doesn't fuse — and because it builds on its own output, errors can compound.
 
-**The payoff of §9.G:** with a time-aware model you can skip the recursion and interpolate t=0.25/0.75
-**directly from the two original frames** (no synthetic-frame feedback), which avoids that error
-compounding for the 7.5-min product. That's the concrete reason multi-granularity is worth it.
+**The payoff of §9.G:** with a time-conditioned model you can skip the recursion and interpolate
+t=0.25/0.75 **directly from the two original frames** (no synthetic-frame feedback), which avoids that
+error compounding for the 7.5-min product. That's the concrete reason arbitrary-time training is worth it.
 
 ### Quick priority list
 1. **Train UNetVFI longer on more GOES/Himawari days** → it should pass the baselines. *(cheapest win)*
-2. **Multi-granularity, time-aware training** *(implemented — §9.G)* → trustworthy 7.5-min frames. **Retrain `weights/unet` once** (the network input changed from 2→3 channels, so old checkpoints must be re-trained).
+2. **Arbitrary-time (time-conditioned) training** *(implemented — §9.G)* → trustworthy 7.5-min frames. **Retrain `weights/unet` once** (the network input changed from 2→3 channels, so old checkpoints must be re-trained).
 3. **Add the water-vapour + split-window bands** → biggest physical accuracy gain.
 4. **Use 3+ frames of context** → captures rotation/acceleration.
 5. **Add a flow-consistency + temporal loss** → smoother, flicker-free animations.
@@ -556,7 +585,7 @@ crisp results.
 ## A.3 Our custom UNetVFI — the exact operations
 1. **Input (time-aware):** concatenate `I₀, I₂` **and a constant "t-plane"** `T[x,y] = t` → a **3-channel**
    tensor. Feeding `t` *into* the network (not just using it to scale the flow afterwards) is what lets one
-   model render any intermediate time and underpins multi-granularity training (§9.G). `t` is a per-sample
+   model render any intermediate time and underpins arbitrary-time training (§9.G). `t` is a per-sample
    value, so a batch can mix t = 0.25 / 0.5 / 0.75.
 2. **U-Net:** encoder `32→64→128→256` (each block halves resolution), decoder back up with **skip
    connections**; final 1×1 conv **head** outputs **5 channels** → `raw_a (2), raw_b (2), mask_logit (1)`

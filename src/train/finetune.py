@@ -48,13 +48,13 @@ def validate(net, ds, device, n: int = 8) -> dict:
 def train(index: str, out: str, steps: int = 20000, lr: float = 1e-4, batch: int = 8,
           patch: int = 256, base: int = 32, device: str | None = None, val_index: str | None = None,
           val_every: int = 500, workers: int = 0, init_weights: str | None = None,
-          pinn: bool = False, pinn_weight: float = 0.1, multigran: bool = False) -> Path:
+          pinn: bool = False, pinn_weight: float = 0.1, anytime: bool = False) -> Path:
     import torch
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-    ds = SatTripletDataset(index_json=index, patch=patch, multigran=multigran)
-    val_ds = SatTripletDataset(index_json=val_index or index, patch=patch, augment=False, multigran=multigran)
-    if multigran:
-        print(f"[train] multi-granularity ON: {len(ds)} variable-(gap,t) samples")
+    ds = SatTripletDataset(index_json=index, patch=patch, anytime=anytime)
+    val_ds = SatTripletDataset(index_json=val_index or index, patch=patch, augment=False, anytime=anytime)
+    if anytime:
+        print(f"[train] arbitrary-time ON: {len(ds)} variable-(gap, t) samples")
     if len(ds) == 0:
         raise RuntimeError(f"No samples in {index}. Download more frames "
                            f"(e.g. `python data_setup.py --download goes --max-gb 5`) then rebuild the index.")
@@ -136,12 +136,12 @@ def main():
     ap.add_argument("--init", default=None, help="warm-start weights (.pt)")
     ap.add_argument("--pinn", action="store_true", help="add the physics-informed (advection) loss")
     ap.add_argument("--pinn-weight", type=float, default=0.1)
-    ap.add_argument("--multigran", action="store_true",
-                    help="train on the variable-(gap,t) multi-granularity samples (30→15→7.5 ready)")
+    ap.add_argument("--anytime", action="store_true",
+                    help="arbitrary-time training on variable-(gap, t) samples (30→15→7.5 ready)")
     a = ap.parse_args()
     train(a.index, a.out, a.steps, a.lr, a.batch, a.patch, a.base, a.device, a.val_index,
           val_every=a.val_every, workers=a.workers, init_weights=a.init,
-          pinn=a.pinn, pinn_weight=a.pinn_weight, multigran=a.multigran)
+          pinn=a.pinn, pinn_weight=a.pinn_weight, anytime=a.anytime)
 
 
 if __name__ == "__main__":

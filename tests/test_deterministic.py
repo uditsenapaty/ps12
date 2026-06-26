@@ -92,18 +92,29 @@ def test_build_triplets_spacing():
     assert len(trips) == 3  # (0,1,2),(1,2,3),(2,3,4)
 
 
-def test_build_multigran_variable_t():
+def test_build_anytime_configurable_grid():
+    import pytest
     from datetime import datetime, timedelta
-    from src.data.triplets import build_multigran
+    from src.data.triplets import build_anytime_samples
     base = datetime(2026, 6, 24, 0, 0)
-    indexed = [(base + timedelta(minutes=10 * i), f"f{i}.nc") for i in range(7)]  # 0..60 min
-    s = build_multigran(indexed, base_gap_minutes=20, levels=3)
-    assert len(s) > 0
-    times = {t for *_, t in s}
-    # the 30→15→7.5 product needs t = 0.25 / 0.5 / 0.75 — all must be produced
-    assert {0.25, 0.5, 0.75}.issubset(times)
-    for p0, p2, gt, t in s:            # every sample is well-formed and strictly interior
+    indexed = [(base + timedelta(minutes=10 * i), f"f{i}.nc") for i in range(13)]  # 0..120 min, 10-min cadence
+
+    # dt = 0.5  -> ONLY the midpoint, across gap sizes (20/40/60 min)
+    mid = build_anytime_samples(indexed, cadence_minutes=10, time_step=0.5, gap_levels=3)
+    assert mid and {t for *_, t in mid} == {0.5}
+
+    # dt = 0.25 -> t in {0.25, 0.5, 0.75}, spans 40/80/120 (base = 4*cadence)
+    q = build_anytime_samples(indexed, cadence_minutes=10, time_step=0.25, gap_levels=3)
+    assert {t for *_, t in q} == {0.25, 0.5, 0.75}
+    for p0, p2, gt, t in q:
         assert p0 != p2 and 0.0 < t < 1.0
+    # off-grid frames are skipped: with dt=0.5 a 40-min span uses +20 (t=0.5), never +10
+    s40 = [s for s in mid if s[0] == "f0.nc" and s[1] == "f4.nc"]   # 0->40 min span
+    assert s40 and all(gt == "f2.nc" for _, _, gt, _ in s40)        # only frame@20, not frame@10
+
+    # time_step must evenly divide 1
+    with pytest.raises(ValueError):
+        build_anytime_samples(indexed, cadence_minutes=10, time_step=0.3)
 
 
 def test_unet_vfi_is_t_conditioned():
@@ -117,7 +128,7 @@ def test_unet_vfi_is_t_conditioned():
         b = net(i0, i1, 0.8)
         assert a.shape == (1, 1, 64, 64)
         assert float((a - b).abs().mean()) > 1e-4
-        # per-sample tensor t (multi-granularity batch) returns one prediction per item
+        # per-sample tensor t (arbitrary-time batch) returns one prediction per item
         pred = net(i0.repeat(3, 1, 1, 1), i1.repeat(3, 1, 1, 1), torch.tensor([0.25, 0.5, 0.75]))
         assert pred.shape == (3, 1, 64, 64)
 

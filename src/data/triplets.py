@@ -77,47 +77,65 @@ def build_triplets(
     return triplets
 
 
-def build_multigran(
+def build_anytime_samples(
     indexed: list[tuple[datetime, Path]],
-    base_gap_minutes: float,
-    levels: int = 3,
+    cadence_minutes: float,
+    time_step: float = 0.5,
+    gap_levels: int = 3,
     tol_minutes: float = 2.0,
 ) -> list[tuple[Path, Path, Path, float]]:
-    """Variable-gap, variable-t samples (t0, t2, gt, t) for granularity-aware training.
+    """Arbitrary-time samples (t0, t2, gt, t) on a CONFIGURABLE t-grid across multiple gap sizes.
 
-    For each anchor frame and each level L in 1..levels, the input span is L*base_gap_minutes; EVERY
-    real interior frame becomes a ground-truth target at its true fraction t = (t_gt - t0) / span.
-    Dense 10-min GOES/Himawari therefore teach the model many gaps (motion magnitudes) AND many
-    times t — exactly what the 30→15→7.5 product needs (t=0.25 / 0.5 / 0.75), instead of only the
-    t=0.5 midpoint with a linear-motion assumption.
+    This is *arbitrary-time* (continuous-time, Super-SloMo style) training with multi-rate (variable-
+    gap) augmentation — NOT "multi-granularity" in the multi-scale sense: every (gap, t) row is an
+    INDEPENDENT sample with its own loss. A multi-scale loss (α·L_fine + β·L_coarse) is a separate idea.
 
-    e.g. base_gap=20, levels=3 on a 10-min sequence -> spans 20/40/60 min:
-      span 20 -> t=0.5 ; span 40 -> t=0.25,0.5,0.75 ; span 60 -> t=1/6..5/6.
+    Configurable cost vs. coverage (variable-t training is expensive, so it is opt-in / tunable):
+      time_step (dt): spacing of the t-grid in (0,1). MUST evenly divide 1 (1/dt an integer), so the
+        grid {dt, 2·dt, … 1−dt} tiles [0,1]. dt=0.5 → ONLY the midpoint t=0.5 (cheapest); dt=0.25 →
+        t∈{0.25,0.5,0.75}; dt=0.2 → {0.2,0.4,0.6,0.8}. Smaller dt ⇒ many more samples ⇒ slower training.
+      gap_levels: number of gap sizes (granules). The base span is (1/dt)·cadence so EVERY grid point
+        lands exactly on a real frame; spans = base, 2·base, …, gap_levels·base. Bigger spans = larger
+        motion magnitudes (covers the GOES 20-min → INSAT 60-min transfer).
+
+    A sample is emitted only when a real frame exists at the required grid time (within tol). This is
+    why some positions are skipped: e.g. with dt=0.5 a 40-min span needs the frame at +20 (t=0.5) — the
+    frame at +10 is off-grid and is NOT used; near the sequence start/end, spans that don't fit are
+    dropped. Each gap level contributes the same (1/dt − 1) grid points per anchor → balanced t coverage.
     """
-    samples: list[tuple[Path, Path, Path, float]] = []
+    n_sub = round(1.0 / time_step)
+    if n_sub < 2 or abs(n_sub * time_step - 1.0) > 1e-6:
+        raise ValueError(f"time_step must evenly divide 1 (1/dt an integer >= 2); got {time_step}. "
+                         "Use 0.5, 0.25, 0.2, 0.125, 0.1 ...")
+    base_min = n_sub * cadence_minutes            # span where grid points coincide with real frames
     tol = tol_minutes * 60
+    times = [t for t, _ in indexed]
+    paths = [p for _, p in indexed]
     n = len(indexed)
+
+    def _find(anchor: int, offset_min: float):
+        """Index of a frame at times[anchor] + offset_min (within tol), else None. Sorted -> early-out."""
+        target = times[anchor] + timedelta(minutes=offset_min)
+        for k in range(anchor + 1, n):
+            d = (times[k] - target).total_seconds()
+            if abs(d) <= tol:
+                return k
+            if d > tol:
+                break
+        return None
+
+    samples: list[tuple[Path, Path, Path, float]] = []
     for i in range(n):
-        t0, p0 = indexed[i]
-        for L in range(1, int(levels) + 1):
-            span = base_gap_minutes * 60 * L
-            j = None
-            for k in range(i + 1, n):
-                dt = (indexed[k][0] - t0).total_seconds()
-                if abs(dt - span) <= tol:
-                    j = k
-                    break
-                if dt > span + tol:
-                    break
+        for m in range(1, int(gap_levels) + 1):
+            span_min = base_min * m
+            j = _find(i, span_min)                       # far input frame I2 at +span
             if j is None:
                 continue
-            t2, p2 = indexed[j]
-            actual = (t2 - t0).total_seconds()
-            for g in range(i + 1, j):
-                tg = (indexed[g][0] - t0).total_seconds()
-                if tg <= 0 or tg >= actual:
+            for s in range(1, n_sub):                    # grid fraction s·dt = s/n_sub
+                g = _find(i, cadence_minutes * m * s)    # grid time = (s/n_sub)·span = cadence·m·s
+                if g is None:
                     continue
-                samples.append((p0, p2, indexed[g][1], round(tg / actual, 4)))
+                samples.append((paths[i], paths[j], paths[g], round(s / n_sub, 4)))
     return samples
 
 

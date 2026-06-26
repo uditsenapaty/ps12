@@ -29,8 +29,8 @@ def main() -> None:
     ap.add_argument("--batch", type=int, default=8)
     ap.add_argument("--pinn", action="store_true", help="add the physics-informed (advection) loss")
     ap.add_argument("--pinn-weight", type=float, default=0.1)
-    ap.add_argument("--multigran", action="store_true",
-                    help="train on variable-(gap,t) multi-granularity samples (30→15→7.5 ready)")
+    ap.add_argument("--anytime", action="store_true",
+                    help="arbitrary-time training on variable-(gap, t) samples (30→15→7.5 ready)")
     ap.add_argument("--source", default="goes19", help="goes19 | himawari9 | insat3dr")
     ap.add_argument("--out", default="weights/unet")
     ap.add_argument("--models", default="classical,raft,unet", help="models to compare in the report")
@@ -53,16 +53,16 @@ def main() -> None:
         print("[retrain] start:", e)
 
     pinn = f"--pinn --pinn-weight {a.pinn_weight}" if a.pinn else ""
-    mg = "--multigran" if a.multigran else ""
-    exp = a.source + ("_pinn" if a.pinn else "") + ("_mg" if a.multigran else "")
+    at = "--anytime" if a.anytime else ""
+    exp = a.source + ("_pinn" if a.pinn else "") + ("_at" if a.anytime else "")
     models = "[" + ",".join(f"'{m.strip()}'" for m in a.models.split(",")) + "]"
 
-    extras = " ".join(x for x in ("+PINN" if a.pinn else "", "+multigran" if a.multigran else "") if x)
+    extras = " ".join(x for x in ("+PINN" if a.pinn else "", "+anytime" if a.anytime else "") if x)
     print(f"[retrain] training {a.source}: {a.steps} steps {extras} on the T4 …")
     print(studio.run(
         "cd ~/ps12 && git fetch -q && git reset --hard origin/main -q && git clean -fd -q 2>/dev/null; "
         f"python -m src.train.finetune --index data/index/{a.source}_triplets.json "
-        f"--steps {a.steps} --batch {a.batch} {pinn} {mg} --out {a.out} --device cuda 2>&1 | tail -6"))
+        f"--steps {a.steps} --batch {a.batch} {pinn} {at} --out {a.out} --device cuda 2>&1 | tail -6"))
 
     print("[retrain] validating …")
     print(studio.run(

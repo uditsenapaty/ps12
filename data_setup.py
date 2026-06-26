@@ -194,31 +194,35 @@ def download_insat(out: Path, max_gb: float = 50.0, sample_n: int | None = None,
 # --------------------------------------------------------------------------------------------------
 # triplet index
 # --------------------------------------------------------------------------------------------------
-def build_index(data_dir: Path, source: str, step_min: float, out_json: Path, levels: int = 3) -> dict:
+def build_index(data_dir: Path, source: str, step_min: float, out_json: Path,
+                time_step: float = 0.5, gap_levels: int = 3) -> dict:
     sys.path.insert(0, str(ROOT))
-    from src.data.triplets import index_frames, build_triplets, build_leave_one_out, build_multigran
+    from src.data.triplets import index_frames, build_triplets, build_leave_one_out, build_anytime_samples
     files = [p for p in data_dir.rglob("*") if p.suffix.lower() in (".nc", ".h5", ".hdf", ".hdf5")]
     indexed = index_frames(files, source)
     trips = build_triplets(indexed, step_min)
     loo = build_leave_one_out(indexed, step_min)
-    # multi-granularity: base span = 2*step (so level-1 midpoint == the plain triplet), up to `levels`.
-    multigran = build_multigran(indexed, base_gap_minutes=2 * step_min, levels=levels)
+    # arbitrary-time samples on a configurable t-grid (time_step) across gap_levels gap sizes; cadence
+    # is the source's frame spacing so grid points coincide with real frames.
+    anytime = build_anytime_samples(indexed, cadence_minutes=step_min,
+                                    time_step=time_step, gap_levels=gap_levels)
     index = {
         "source": source,
         "step_min": step_min,
-        "multigran_levels": levels,
+        "anytime_time_step": time_step,
+        "anytime_gap_levels": gap_levels,
         "n_frames": len(indexed),
         "n_triplets": len(trips),
         "n_leave_one_out": len(loo),
-        "n_multigran": len(multigran),
+        "n_anytime": len(anytime),
         "triplets": [[str(a), str(b), str(c)] for a, b, c in trips],
         "leave_one_out": [[str(a), str(b), str(c)] for a, b, c in loo],
-        "multigran": [[str(a), str(b), str(c), t] for a, b, c, t in multigran],
+        "anytime": [[str(a), str(b), str(c), t] for a, b, c, t in anytime],
     }
     out_json.parent.mkdir(parents=True, exist_ok=True)
     out_json.write_text(json.dumps(index, indent=2), encoding="utf-8")
-    print(f"[index] {source}: {len(indexed)} frames -> {len(trips)} triplets, "
-          f"{len(loo)} leave-one-out, {len(multigran)} multi-granularity (levels={levels}) -> {out_json}")
+    print(f"[index] {source}: {len(indexed)} frames -> {len(trips)} triplets, {len(loo)} leave-one-out, "
+          f"{len(anytime)} arbitrary-time (dt={time_step}, gap_levels={gap_levels}) -> {out_json}")
     return index
 
 
@@ -260,7 +264,9 @@ def main() -> None:
     ap.add_argument("--build-index", action="store_true")
     ap.add_argument("--source", default="goes19", help="source tag for --build-index")
     ap.add_argument("--step-min", type=float, default=10.0, help="triplet spacing in minutes")
-    ap.add_argument("--levels", type=int, default=3, help="multi-granularity span levels (30→15→7.5 needs ≥2)")
+    ap.add_argument("--time-step", type=float, default=0.5,
+                    help="arbitrary-time t-grid spacing in (0,1); must divide 1. 0.5=midpoint only, 0.25=quarters")
+    ap.add_argument("--gap-levels", type=int, default=3, help="number of gap sizes / granules (spans = base,2·base,…)")
     ap.add_argument("--env", action="store_true", help="install GPU requirements (server)")
     ap.add_argument("--clone", nargs="?", const="all", help="clone deep-model repos into referred_clones/ "
                     "(all | rife | film | superslomo)")
@@ -290,7 +296,8 @@ def main() -> None:
     if args.build_index:
         data_dir = (SAMPLES if (SAMPLES / args.source.replace('insat3dr', 'insat')).exists() else DATA)
         build_index(data_dir, args.source, args.step_min,
-                    DATA / "index" / f"{args.source}_triplets.json", levels=args.levels)
+                    DATA / "index" / f"{args.source}_triplets.json",
+                    time_step=args.time_step, gap_levels=args.gap_levels)
         return
 
     ap.print_help()

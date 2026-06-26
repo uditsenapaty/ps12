@@ -45,19 +45,19 @@ class SatTripletDataset:
         min_valid_frac: float = 0.5,
         seed: int = 1234,
         crop_frac: float = 0.35,
-        multigran: bool = False,
+        anytime: bool = False,
     ):
         if samples is None and triplets is None:
             if index_json is None:
                 raise ValueError("provide index_json, triplets, or samples")
             data = json.loads(Path(index_json).read_text(encoding="utf-8"))
             source = data.get("source", source)
-            if multigran and data.get("multigran"):
-                samples = data["multigran"]
+            if anytime and data.get("anytime"):
+                samples = data["anytime"]
             else:
                 triplets = data["triplets"]
         # Canonical sample = (I0_path, I1_path, GT_path, t). Triplets (t0, t_mid, t2) map to t=0.5 with
-        # I0=t0, I1=t2, GT=t_mid; multigran rows are already (t0, t2, gt, t).
+        # I0=t0, I1=t2, GT=t_mid; arbitrary-time rows are already (t0, t2, gt, t).
         if samples is not None:
             self.samples = [(str(s[0]), str(s[1]), str(s[2]), float(s[3])) for s in samples]
         else:

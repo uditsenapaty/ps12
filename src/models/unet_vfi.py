@@ -50,12 +50,12 @@ def build_net():
         """Predicts (flow_t0[2], flow_t1[2], mask[1]) from concat(I0, I1, t-plane) and warps to time t.
 
         t-conditioned: the target time t is fed in as a constant input channel (a "t-plane"), so the
-        network *sees* which intermediate time it must synthesise — this is what lets one model handle
-        multiple granularities (t=0.25 / 0.5 / 0.75 for 30→15→7.5) rather than assuming linear motion.
+        network *sees* which intermediate time it must synthesise — this is what enables arbitrary-time
+        interpolation (any t∈(0,1), e.g. t=0.25/0.5/0.75 for 30→15→7.5) rather than assuming linear motion.
         """
         def __init__(self, base: int = 32):
             super().__init__()
-            self.inc = nn.Sequential(conv(3, base), conv(base, base))   # I0, I1, t-plane (granularity-aware)
+            self.inc = nn.Sequential(conv(3, base), conv(base, base))   # I0, I1, t-plane (time-conditioned)
             self.d1 = Down(base, base * 2)
             self.d2 = Down(base * 2, base * 4)
             self.d3 = Down(base * 4, base * 8)
@@ -78,7 +78,7 @@ def build_net():
         @staticmethod
         def _t_tensor(t, ref):
             """t -> (B,1,1,1) tensor on ref's device/dtype. Accepts a python float (same t for the whole
-            batch) or a per-sample tensor of shape (B,) — so multi-granularity batches mix different t."""
+            batch) or a per-sample tensor of shape (B,) — so arbitrary-time batches mix different t."""
             B = ref.shape[0]
             if torch.is_tensor(t):
                 return t.to(device=ref.device, dtype=ref.dtype).reshape(B, 1, 1, 1)
