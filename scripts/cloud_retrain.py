@@ -7,7 +7,11 @@ runs the validation report there, then fetches the report text and git-commits +
 account.
 
   python scripts/cloud_retrain.py --steps 8000 --pinn --source goes19 --commit
+  python scripts/cloud_retrain.py --steps 8000 --multigap --multigap-levels 2 --source goes19 --commit
   python scripts/cloud_retrain.py --steps 3000 --batch 8            # no PINN, no commit (dry look)
+
+The multigap level / arbitrary-time grid live in the data index, so this script REBUILDS the index on
+the Studio (with --multigap-levels / --time-step / --gap-levels) before each run, then trains on it.
 """
 from __future__ import annotations
 
@@ -33,6 +37,12 @@ def main() -> None:
                     help="arbitrary-time training on variable-(gap, t) samples (30→15→7.5 ready)")
     ap.add_argument("--multigap", action="store_true",
                     help="temporal multi-granularity: each target supervised from symmetric gaps (combined loss)")
+    ap.add_argument("--multigap-levels", type=int, default=1,
+                    help="symmetric bracket levels per target for --multigap (1=plain midpoint, 2=+wider). Rebuilds the index.")
+    ap.add_argument("--time-step", type=float, default=0.5,
+                    help="arbitrary-time t-grid spacing for --anytime (0.5=midpoint, 0.25=quarters). Rebuilds the index.")
+    ap.add_argument("--gap-levels", type=int, default=3,
+                    help="arbitrary-time gap sizes for --anytime. Rebuilds the index.")
     ap.add_argument("--source", default="goes19", help="goes19 | himawari9 | insat3dr")
     ap.add_argument("--out", default="weights/unet")
     ap.add_argument("--models", default="classical,raft,unet", help="models to compare in the report")
@@ -62,9 +72,17 @@ def main() -> None:
 
     extras = " ".join(x for x in ("+PINN" if a.pinn else "", "+anytime" if a.anytime else "",
                                   "+multigap" if a.multigap else "") if x)
-    print(f"[retrain] training {a.source}: {a.steps} steps {extras} on the T4 …")
+    # The multigap level / arbitrary-time grid live in the INDEX, so rebuild it on the Studio with the
+    # requested levels before training (cadence = 30 min for INSAT, else 10 min).
+    cadence = 30 if a.source.startswith("insat") else 10
+    build = (f"python data_setup.py --build-index --source {a.source} --step-min {cadence} "
+             f"--time-step {a.time_step} --gap-levels {a.gap_levels} --multigap-levels {a.multigap_levels}")
+    lvl = (f" (multigap L{a.multigap_levels})" if a.multigap
+           else f" (anytime dt={a.time_step}, gaps={a.gap_levels})" if a.anytime else "")
+    print(f"[retrain] {a.source}: rebuild index + {a.steps} steps {extras}{lvl} on the T4 …")
     print(studio.run(
         "cd ~/ps12 && git fetch -q && git reset --hard origin/main -q && git clean -fd -q 2>/dev/null; "
+        f"echo '[index] rebuilding with the requested levels …'; {build} 2>&1 | tail -2; "
         f"python -m src.train.finetune --index data/index/{a.source}_triplets.json "
         f"--steps {a.steps} --batch {a.batch} {pinn} {at} {mg} --out {a.out} --device cuda 2>&1 | tail -6"))
 
