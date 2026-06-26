@@ -207,14 +207,21 @@ with tab_interp:
         else:
             c1, c2, c3 = st.columns(3)
             with c1:
+                st.caption("**t0** · required")
                 up0 = st.file_uploader("Frame t0", type=["nc", "h5"], key="f0")
                 pick0 = st.selectbox("…or sample t0", [""] + [str(p) for p in sample_files], key="p0")
             with c2:
+                st.caption("**t2** · required")
                 up1 = st.file_uploader("Frame t2", type=["nc", "h5"], key="f1")
                 pick1 = st.selectbox("…or sample t2", [""] + [str(p) for p in sample_files], key="p1")
             with c3:
-                upgt = st.file_uploader("GT middle t1", type=["nc", "h5"], key="fgt")
-                pickgt = st.selectbox("…or sample t1 (GT)", [""] + [str(p) for p in sample_files], key="pgt")
+                st.caption("**t1 (GT)** · optional — validation only")
+                _gt_help = ("The REAL middle frame. Provide it only to score the prediction "
+                            "(PSNR/SSIM/FSIM/…). Not needed to generate the in-between frames — "
+                            "leave blank to just interpolate.")
+                upgt = st.file_uploader("GT middle t1 (optional)", type=["nc", "h5"], key="fgt", help=_gt_help)
+                pickgt = st.selectbox("…or sample t1 (GT)", [""] + [str(p) for p in sample_files],
+                                      key="pgt", help=_gt_help)
     go = st.button("Interpolate", type="primary", key="btn_i", use_container_width=True)
 
     if go and use_remote:
