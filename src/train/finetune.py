@@ -82,10 +82,24 @@ def train(index: str, out: str, steps: int = 20000, lr: float = 1e-4, batch: int
     import torch
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     if multigap:
-        ds = MultiGapDataset(index_json=index, patch=patch)
-        val_ds = MultiGapDataset(index_json=val_index or index, patch=patch, augment=False)
-        print(f"[train] temporal multi-granularity ON: {len(ds)} multi-gap groups "
-              f"(same target supervised from several gaps, combined loss)")
+        # --index may be a comma-separated list (e.g. goes19_mg,himawari9_mg). Mix sources with a
+        # ConcatDataset of per-source MultiGapDatasets — they CANNOT share one index because each dataset
+        # reads every frame with a single source/reader. Force a common max_level so the default collate
+        # can stack LEFTS/RIGHTS into (B, M, 1, H, W) across the two sources.
+        mg_paths = [s.strip() for s in str(index).split(",") if s.strip()]
+        if len(mg_paths) > 1:
+            ml = max(int(json.loads(Path(p).read_text()).get("multigap_levels", 1)) for p in mg_paths)
+            subs = [MultiGapDataset(index_json=p, patch=patch, max_level=ml) for p in mg_paths]
+            ds = torch.utils.data.ConcatDataset(subs)
+            val_ds = MultiGapDataset(index_json=val_index or mg_paths[0], patch=patch, augment=False, max_level=ml)
+            print("[train] multigap multi-source ON: "
+                  + ", ".join(f"{Path(p).stem}={len(s)}" for p, s in zip(mg_paths, subs))
+                  + f" (total {len(ds)} groups, max_level={ml}, combined loss)")
+        else:
+            ds = MultiGapDataset(index_json=index, patch=patch)
+            val_ds = MultiGapDataset(index_json=val_index or index, patch=patch, augment=False)
+            print(f"[train] temporal multi-granularity ON: {len(ds)} multi-gap groups "
+                  f"(same target supervised from several gaps, combined loss)")
     else:
         # Multi-source training (added): --index may be a comma-separated list of per-source index files
         # (e.g. goes19,himawari9,insat3dr). Each SatTripletDataset reads with its own source, and a

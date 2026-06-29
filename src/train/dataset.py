@@ -138,6 +138,7 @@ class MultiGapDataset:
         min_valid_frac: float = 0.5,
         seed: int = 1234,
         crop_frac: float = 0.35,
+        max_level: int | None = None,
     ):
         if groups is None:
             if index_json is None:
@@ -147,7 +148,10 @@ class MultiGapDataset:
             groups = data.get("multigap", [])
         # (target, [(left, right), ...])
         self.groups = [(str(g[0]), [(str(l), str(r)) for l, r in g[1]]) for g in groups]
-        self.max_level = max((len(v) for _, v in self.groups), default=1)
+        # max_level may be forced (e.g. when ConcatDataset-mixing two sources, so every item pads to the
+        # SAME M and the default collate can stack LEFTS/RIGHTS into (B, M, 1, H, W)); else infer it.
+        self.max_level = int(max_level) if max_level is not None \
+            else max((len(v) for _, v in self.groups), default=1)
         self.source = source
         self.patch = patch
         self.bt_min, self.bt_max = bt_min, bt_max
