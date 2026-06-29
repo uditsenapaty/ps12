@@ -51,6 +51,7 @@ from src.eval.report import _read_bt, summarize  # noqa: E402
 from src.infer.interpolate import interpolate_pair_bt  # noqa: E402
 from src.models.factory import get_model  # noqa: E402
 from src.train.finetune import train  # noqa: E402
+from src.train.rife_finetune import finetune as rife_finetune  # noqa: E402
 
 DATA = ROOT / "data"
 IDXD = DATA / "index_matrix"
@@ -177,6 +178,7 @@ def main():
     ap.add_argument("--ema", type=float, default=0.999)
     ap.add_argument("--multigap-level", type=int, default=2, help="setup-3 GOES+Himawari gap levels (20/40)")
     ap.add_argument("--device", default="cuda")
+    ap.add_argument("--force", action="store_true", help="retrain even if a checkpoint exists (else reuse)")
     a = ap.parse_args()
     t_start = time.time()
     IDXD.mkdir(parents=True, exist_ok=True)
@@ -205,20 +207,51 @@ def main():
     print(f"[index] train triplets: goes={n_gt} hima={n_ht} insat={n_it}; "
           f"multigap groups: goes={n_gmg} hima={n_hmg}", flush=True)
 
-    # ---- 2. train the three custom models ----------------------------------------------------------
-    print("\n===== SETUP 1: train custom on GOES (20-min) =====", flush=True)
-    train(str(i_goes_tri), out=str(WD / "unet_goes"), steps=a.steps, batch=a.batch,
-          device=a.device, ema_decay=a.ema)
-    print("\n===== SETUP 2: train custom on Himawari (20-min) =====", flush=True)
-    train(str(i_hima_tri), out=str(WD / "unet_hima"), steps=a.steps, batch=a.batch,
-          device=a.device, ema_decay=a.ema)
-    print("\n===== SETUP 3a: train custom on GOES+Himawari multigap (gap 20/40) =====", flush=True)
-    train(f"{i_goes_mg},{i_hima_mg}", out=str(WD / "unet_mix"), steps=a.steps, batch=a.batch,
-          device=a.device, multigap=True, ema_decay=a.ema)
-    print("\n===== SETUP 3b: self-supervise on INSAT (60-min), warm-start from unet_mix =====", flush=True)
-    mix_ckpt = WD / "unet_mix" / "best.pt"
-    train(str(i_insat_tri), out=str(WD / "unet_mix_insat"), steps=a.steps, batch=max(2, a.batch // 2),
-          device=a.device, init_weights=str(mix_ckpt), ema_decay=a.ema)
+    # ---- 2. train the three custom models (skip if already trained, unless --force) ----------------
+    def need(outdir, ckpt="best.pt"):
+        ex = (Path(outdir) / ckpt).exists()
+        if ex and not a.force:
+            print(f"[skip-train] {Path(outdir).name} ({ckpt} exists — reusing)", flush=True)
+        return a.force or not ex
+
+    if need(WD / "unet_goes"):
+        print("\n===== SETUP 1: train custom on GOES (20-min) =====", flush=True)
+        train(str(i_goes_tri), out=str(WD / "unet_goes"), steps=a.steps, batch=a.batch, device=a.device, ema_decay=a.ema)
+    if need(WD / "unet_hima"):
+        print("\n===== SETUP 2: train custom on Himawari (20-min) =====", flush=True)
+        train(str(i_hima_tri), out=str(WD / "unet_hima"), steps=a.steps, batch=a.batch, device=a.device, ema_decay=a.ema)
+    if need(WD / "unet_mix"):
+        print("\n===== SETUP 3a: train custom on GOES+Himawari multigap (gap 20/40) =====", flush=True)
+        train(f"{i_goes_mg},{i_hima_mg}", out=str(WD / "unet_mix"), steps=a.steps, batch=a.batch,
+              device=a.device, multigap=True, ema_decay=a.ema)
+    if need(WD / "unet_mix_insat"):
+        print("\n===== SETUP 3b: self-supervise custom on INSAT (60-min), warm-start from unet_mix =====", flush=True)
+        train(str(i_insat_tri), out=str(WD / "unet_mix_insat"), steps=a.steps, batch=max(2, a.batch // 2),
+              device=a.device, init_weights=str(WD / "unet_mix" / "best.pt"), ema_decay=a.ema)
+
+    # ---- 2b. finetuned-baseline RIFE: fine-tuned the SAME 3 ways (only if pretrained RIFE is runnable)
+    rife_ok = maybe("rife") is not None
+    rife_pre = WD / "rife"
+    RIFE_FT = {"setup1": WD / "rife_goes", "setup2": WD / "rife_hima", "setup3": WD / "rife_mix_insat"}
+    if rife_ok:
+        if need(RIFE_FT["setup1"], "flownet.pkl"):
+            print("\n===== RIFE-ft 1: finetune RIFE on GOES =====", flush=True)
+            rife_finetune(str(i_goes_tri), weights=str(rife_pre), out=str(RIFE_FT["setup1"]),
+                          steps=a.steps, batch=a.batch, device=a.device)
+        if need(RIFE_FT["setup2"], "flownet.pkl"):
+            print("\n===== RIFE-ft 2: finetune RIFE on Himawari =====", flush=True)
+            rife_finetune(str(i_hima_tri), weights=str(rife_pre), out=str(RIFE_FT["setup2"]),
+                          steps=a.steps, batch=a.batch, device=a.device)
+        if need(WD / "rife_mix", "flownet.pkl"):
+            print("\n===== RIFE-ft 3a: finetune RIFE on GOES+Himawari =====", flush=True)
+            rife_finetune(f"{i_goes_tri},{i_hima_tri}", weights=str(rife_pre), out=str(WD / "rife_mix"),
+                          steps=a.steps, batch=a.batch, device=a.device)
+        if need(RIFE_FT["setup3"], "flownet.pkl"):
+            print("\n===== RIFE-ft 3b: self-supervise RIFE on INSAT, warm-start from rife_mix =====", flush=True)
+            rife_finetune(str(i_insat_tri), weights=str(WD / "rife_mix"), out=str(RIFE_FT["setup3"]),
+                          steps=a.steps, batch=max(2, a.batch // 2), device=a.device)
+    else:
+        print("[rife-ft] pretrained RIFE not runnable -> skipping finetuned-RIFE baseline", flush=True)
 
     # ---- 3. zero-shot baselines (setup-independent) -> compute once per source ----------------------
     print("\n===== baselines (zero-shot, computed once per source) =====", flush=True)
@@ -236,12 +269,13 @@ def main():
             base_have.add(nm)
             base_rows[s] += eval_rows(label, mdl, s, eval_sets[s])
 
-    # finetuned baseline (RIFE-ft) — included only if a checkpoint exists; honest N/A otherwise.
-    ft_model = maybe("rife_ft")
-    ft_note = ("rife_ft (finetuned RIFE): N/A — no pretrained RIFE weights on this box to fine-tune from "
-               "(weights/rife absent). FILM/Super-SloMo have no fine-tune loop in this repo, so a "
-               "'finetuned FILM/SloMo' would be fabricated and is omitted."
-               if ft_model is None else "rife_ft (finetuned RIFE): included.")
+    # finetuned baseline = RIFE fine-tuned the same 3 ways (the per-setup model is picked in the loop).
+    ft_note = ("Finetuned baseline = RIFE fine-tuned on satellite IR the SAME 3 ways as our model "
+               "(GOES / Himawari / GOES+Himawari → INSAT self-sup). FILM/Super-SloMo have no fine-tune "
+               "loop in this repo, so a 'finetuned FILM/SloMo' would be fabricated and is omitted."
+               if rife_ok else
+               "Finetuned baseline N/A: pretrained RIFE not runnable on this box; FILM/Super-SloMo have "
+               "no fine-tune loop here (a finetuned row would be fabricated).")
 
     base_footnote = ("Zero-shot = classical (algorithmic) + pretrained nets used frozen (no training on "
                      "satellite IR). Runnable: " + (", ".join(sorted(base_have)) or "none")
@@ -262,11 +296,12 @@ def main():
                "across setups). " + ft_note, ""]
     for skey, sdesc, wdir, ulabel in SETUPS:
         custom = maybe("unet", weights_dir=str(wdir))
+        rife_ft_model = maybe("rife", weights_dir=str(RIFE_FT[skey])) if rife_ok else None
         summary.append(f"## {skey}: {sdesc}")
         for s in SRC_DIR:
             rows = list(base_rows[s])
-            if ft_model is not None:
-                rows += eval_rows("rife_ft (finetuned)", ft_model, s, eval_sets[s])
+            if rife_ft_model is not None:
+                rows += eval_rows(f"rife_ft (finetuned · {skey})", rife_ft_model, s, eval_sets[s])
             if custom is not None:
                 rows += eval_rows(ulabel, custom, s, eval_sets[s])
             else:

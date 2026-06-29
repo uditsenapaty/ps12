@@ -48,8 +48,17 @@ def finetune(index: str, weights: str, out: str, steps: int = 15000, lr: float =
 
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     model = _load_rife(weights, device)
-    ds = SatTripletDataset(index_json=index, patch=patch)
-    loader = torch.utils.data.DataLoader(ds, batch_size=batch, shuffle=True, num_workers=workers, drop_last=True)
+    # --index may be comma-separated (e.g. goes_tri,hima_tri) -> ConcatDataset mix of per-source datasets.
+    idx_paths = [s.strip() for s in str(index).split(",") if s.strip()]
+    if len(idx_paths) > 1:
+        subs = [SatTripletDataset(index_json=p, patch=patch) for p in idx_paths]
+        ds = torch.utils.data.ConcatDataset(subs)
+        print("[rife-ft] multi-source: " + ", ".join(f"{Path(p).stem}={len(s)}" for p, s in zip(idx_paths, subs)))
+    else:
+        ds = SatTripletDataset(index_json=index, patch=patch)
+    # drop_last=False + eff_batch so tiny sets (e.g. INSAT self-sup) still yield a batch (no infinite loop).
+    eff_batch = max(1, min(batch, len(ds)))
+    loader = torch.utils.data.DataLoader(ds, batch_size=eff_batch, shuffle=True, num_workers=workers, drop_last=False)
     out_dir = Path(out); out_dir.mkdir(parents=True, exist_ok=True)
 
     def to3(x):  # (B,1,H,W) -> (B,3,H,W) on device
