@@ -159,7 +159,7 @@ usp = [
     "Trained on satellite IR (brightness temperature) — not natural video.",
     "Cross-satellite transfer: learn on dense GOES-19 / Himawari (10-min) → apply to INSAT.",
     "Self-supervised INSAT adaptation — needs NO labels (uses INSAT's own 30-min frames).",
-    "Custom UNetVFI = intermediate-flow (RIFE-style) + visibility blending (Super-SloMo-style).",
+    "Custom FeatSynthVFI = coarse-to-fine intermediate flow (RIFE) + feature-synthesis residual (FILM) + visibility blend (Super-SloMo).",
     "Complete product: .nc → .nc, web dashboard, and a metric-validated report.",
 ]
 tb(sl, 5.3, 1.85, 4.25, 0.3, [{"t": "UNIQUE ADVANTAGES", "s": 11, "c": GREEN, "b": True}])
@@ -169,16 +169,16 @@ for i, u in enumerate(usp):
     tb(sl, 5.55, y - 0.05, 4.0, 0.5, [{"t": u, "s": 11.5, "c": INK}])
 rect(sl, 5.3, 4.78, 4.25, 0.42, MIST, line=HAIR, radius=0.18)
 settext(sl.shapes[-1], [{"runs": [{"t": "Already real:  ", "s": 11, "c": GREEN, "b": True},
-        {"t": "trained on a Tesla T4, validated on real GOES-19 (val PSNR ≈ 42, SSIM ≈ 0.95).",
-         "s": 11, "c": INK}]}], anchor=MSO_ANCHOR.MIDDLE)
+        {"t": "on a held-out GOES-19 day it ranks #2 of 5 — beats classical/RAFT/Super-SloMo, matches FILM (PSNR 38.8, SSIM 0.957).",
+         "s": 10.5, "c": INK}]}], anchor=MSO_ANCHOR.MIDDLE)
 
 # ===============================================================================
 # SLIDE 4 — Features (clean 3x2 tiles, numbered, no left bars)
 sl = S[3]; clear_prompts(sl)
 head(sl, "02 · Capabilities", "What the solution does", accent=BLUE)
 feats = [
-    ("Five interpolation engines", "Custom UNetVFI + RIFE + FILM + Super-SloMo + RAFT, with a classical "
-     "TV-L1 baseline for honest comparison.", BLUE),
+    ("Five interpolation engines", "Custom FeatSynthVFI (ours) + RIFE + FILM + Super-SloMo + RAFT, with a "
+     "classical TV-L1 baseline for honest comparison.", BLUE),
     ("Temporal upscaling", "Recursive ×2/×4 (30→15→7.5) plus Continuous mode — any cadence, each frame "
      "direct from two real frames (no error compounding).", TEAL),
     ("Standards I/O", "Reads .nc/.h5 (GOES / Himawari / INSAT), writes CF NetCDF brightness "
@@ -200,8 +200,8 @@ for k, (t_, b_, col) in enumerate(feats):
 rect(sl, 0.55, 4.85, 9.0, 0.42, NAVY, radius=0.2)
 settext(sl.shapes[-1], [{"runs": [
     {"t": "Metric  ", "s": 11, "c": ORANGE, "b": True},
-    {"t": "PSNR = 10·log₁₀(1 / MSE)  →  perfect frame → PSNR infinite.   Our UNetVFI reached val PSNR ≈ 42 dB, "
-          "SSIM ≈ 0.95 on held-out GOES.", "s": 11, "c": WHITE}]}], anchor=MSO_ANCHOR.MIDDLE)
+    {"t": "PSNR = 10·log₁₀(1 / MSE) → higher is better.   On a held-out GOES day our FeatSynthVFI scored "
+          "PSNR 38.8 / SSIM 0.957 — #2 of 5, matching pretrained SOTA FILM.", "s": 11, "c": WHITE}]}], anchor=MSO_ANCHOR.MIDDLE)
 
 # ===============================================================================
 # SLIDE 5 — Process flow (clean stages + thin arrowed connectors + equation)
@@ -287,8 +287,8 @@ for i, (lab, ac) in enumerate(fr):
     if i < 2:
         conn(sl, fx + 2.0, 3.44, fx + 2.18, 3.44, MUTE, w=1.2)
 # metric chips
-for i, (lab, val, c) in enumerate([("PSNR", "33.5", BLUE), ("SSIM", "0.89", TEAL), ("FSIM", "0.99", VIOLET),
-                                   ("MAE(K)", "1.7", ORANGE)]):
+for i, (lab, val, c) in enumerate([("PSNR", "38.8", BLUE), ("SSIM", "0.957", TEAL), ("FSIM", "0.995", VIOLET),
+                                   ("MAE(K)", "0.91", ORANGE)]):
     cx = 2.9 + i * 1.62
     rect(sl, cx, 4.45, 1.5, 0.5, WHITE, line=HAIR, radius=0.12)
     settext(sl.shapes[-1], [{"t": val, "s": 13, "c": c, "b": True, "sa": 0, "align": PP_ALIGN.CENTER},
@@ -301,7 +301,7 @@ tb(sl, 0.55, 5.18, 9.0, 0.3, [{"t": "Served from the cloud T4 → opened in your
 # ===============================================================================
 # SLIDE 7 — Architecture (research-paper U-Net)
 sl = S[6]; clear_prompts(sl)
-head(sl, "05 · Architecture", "Custom UNetVFI — flow + visibility", accent=VIOLET)
+head(sl, "05 · Architecture", "Custom FeatSynthVFI — flow + feature synthesis", accent=VIOLET)
 
 
 def fmap(sl, cx, cyc, h, ch, fill, res):
@@ -320,8 +320,8 @@ tb(sl, 0.55, 2.96, 0.62, 0.18, [{"t": "I₀", "s": 9, "c": INK, "b": True, "alig
 irframe(sl, 0.55, 3.15, 0.62, 0.5)
 tb(sl, 0.55, 3.66, 0.62, 0.18, [{"t": "I₂", "s": 9, "c": INK, "b": True, "align": PP_ALIGN.CENTER}], align=PP_ALIGN.CENTER)
 rect(sl, 1.3, 2.72, 0.58, 0.66, NAVY, radius=0.12)
-settext(sl.shapes[-1], [{"t": "concat", "s": 8.5, "c": WHITE, "b": True, "sa": 0, "align": PP_ALIGN.CENTER},
-        {"t": "2 ch", "s": 7, "c": WHITE, "align": PP_ALIGN.CENTER}], align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
+settext(sl.shapes[-1], [{"t": "Siamese", "s": 8.5, "c": WHITE, "b": True, "sa": 0, "align": PP_ALIGN.CENTER},
+        {"t": "enc ×2", "s": 7, "c": WHITE, "align": PP_ALIGN.CENTER}], align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
 conn(sl, 1.17, 2.7, 1.34, 2.9, MUTE, w=1.0); conn(sl, 1.17, 3.4, 1.34, 3.2, MUTE, w=1.0)
 # encoder (down-step) E1..E4
 encx = [2.15, 2.9, 3.65, 4.4]; ench = [1.5, 1.15, 0.85, 0.6]
@@ -358,7 +358,7 @@ conn(sl, 8.5, 2.62, 8.72, 2.62, INK, w=1.3)                       # flows+mask -
 conn(sl, 8.5, 3.42, 8.72, 3.42, TEAL, w=1.1, dash="dash")          # source -> PINN loss (training only)
 rect(sl, 8.74, 2.25, 0.92, 0.78, NAVY, radius=0.1)
 settext(sl.shapes[-1], [{"t": "warp", "s": 9, "c": WHITE, "b": True, "sa": 0, "align": PP_ALIGN.CENTER},
-        {"t": "+ blend", "s": 8.5, "c": WHITE, "align": PP_ALIGN.CENTER}], align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
+        {"t": "blend+synth", "s": 7.5, "c": WHITE, "align": PP_ALIGN.CENTER}], align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
 irframe(sl, 8.9, 3.2, 0.6, 0.46, accent=GREEN)
 tb(sl, 8.72, 3.66, 0.95, 0.2, [{"t": "I(t)", "s": 9.5, "c": GREEN, "b": True, "align": PP_ALIGN.CENTER}], align=PP_ALIGN.CENTER)
 conn(sl, 9.2, 3.05, 9.2, 3.18, GREEN, w=1.3)
@@ -366,18 +366,19 @@ tb(sl, 8.55, 3.86, 1.1, 0.2, [{"t": "PINN loss", "s": 7.5, "c": TEAL, "i": True,
 # caption strip
 rect(sl, 0.55, 4.5, 9.0, 0.9, MIST, line=HAIR, radius=0.06)
 tb(sl, 0.75, 4.55, 8.7, 0.85, [
-    {"runs": [{"t": "Blend:  ", "s": 9.5, "c": VIOLET, "b": True},
-              {"t": "I(t) = M·warp(I₀, F_{t→0}) + (1−M)·warp(I₂, F_{t→1})", "s": 9.5, "c": INK, "b": True},
-              {"t": "   — RIFE-style intermediate flow + Super-SloMo visibility mask.", "s": 9.5, "c": SLATE}], "sa": 2},
+    {"runs": [{"t": "Pipeline:  ", "s": 9.5, "c": VIOLET, "b": True},
+              {"t": "Siamese encoder → coarse-to-fine intermediate flow (RIFE/IFRNet) → I(t)=M·warp(I₀,F_{t→0})+(1−M)·warp(I₂,F_{t→1})",
+               "s": 9.3, "c": INK, "b": True},
+              {"t": "  + feature-synthesis residual (FILM/SoftSplat).", "s": 9.3, "c": SLATE}], "sa": 2},
     {"runs": [{"t": "Physics-informed (PINN, training):  ", "s": 9.5, "c": TEAL, "b": True},
-              {"t": "advection ∂I/∂t + u·grad(I) = S — source S models cloud growth; +0.12 PSNR measured.",
+              {"t": "advection ∂I/∂t + u·grad(I) = S — source S models cloud growth/decay optical flow can't.",
                "s": 9.5, "c": SLATE}], "sa": 2},
     {"runs": [{"t": "Arbitrary-time (implicit t):  ", "s": 9.5, "c": TEAL, "b": True},
               {"t": "t scales the predicted flow; trained on a configurable t-grid × gap-granule set + "
                     "multi-gap consistency → one model renders 30→15→7.5 min, not just the midpoint.",
                "s": 9.5, "c": SLATE}], "sa": 2},
-    {"runs": [{"t": "~2–5M params · trains on a T4 in hours · self-supervised on INSAT · "
-                    "Local → GitHub → Lightning T4 → Streamlit.", "s": 9, "c": SLATE}]}])
+    {"runs": [{"t": "~4.25M params · #2 of 5 on a held-out GOES day (beats classical/RAFT/Super-SloMo, "
+                    "matches FILM) · trains on a T4 in hours · self-supervised on INSAT.", "s": 9, "c": SLATE}]}])
 
 # ===============================================================================
 # SLIDE 8 — Technologies (clean rows, colored dot, no bars)
@@ -432,7 +433,7 @@ tb(sl, 0.5, 0.98, 9.0, 0.56, [{"t": "Validated, reproducible, and ready", "s": 2
 rect(sl, 0.54, 1.55, 1.25, 0.05, ORANGE, rounded=False)
 outs = [
     ("Real GPU run", "Trained on a Tesla T4; deterministic battery 16/16 green.", BLUE),
-    ("Measured quality", "UNetVFI val PSNR ≈ 42 / SSIM ≈ 0.95; full classical / RAFT / UNet comparison.", TEAL),
+    ("Measured quality", "FeatSynthVFI: held-out GOES PSNR 38.8 / SSIM 0.957 — #2 of 5, beats classical/RAFT/Super-SloMo, matches FILM.", TEAL),
     ("End-to-end", ".nc → .nc interpolation + 30→15→7.5 min upscaling + web dashboard.", VIOLET),
     ("Open & free", "Open-source backbones, free-tier T4, datasets at ₹0.", GREEN),
 ]
