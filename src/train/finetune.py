@@ -17,7 +17,7 @@ import numpy as np
 from ..eval.metrics import psnr, ssim
 from ..models.unet_vfi import build_net
 from .dataset import MultiGapDataset, SatTripletDataset
-from .losses import advection_physics_loss, combined_loss
+from .losses import advection_physics_loss, combined_loss, perceptual_loss
 
 
 def _loader(ds, batch_size, shuffle, workers=0):
@@ -78,7 +78,7 @@ def train(index: str, out: str, steps: int = 20000, lr: float = 1e-4, batch: int
           patch: int = 256, base: int = 32, device: str | None = None, val_index: str | None = None,
           val_every: int = 500, workers: int = 0, init_weights: str | None = None,
           pinn: bool = False, pinn_weight: float = 0.1, anytime: bool = False,
-          multigap: bool = False) -> Path:
+          multigap: bool = False, perc_weight: float = 0.0, ema_decay: float = 0.0) -> Path:
     import torch
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     if multigap:
@@ -87,10 +87,22 @@ def train(index: str, out: str, steps: int = 20000, lr: float = 1e-4, batch: int
         print(f"[train] temporal multi-granularity ON: {len(ds)} multi-gap groups "
               f"(same target supervised from several gaps, combined loss)")
     else:
-        ds = SatTripletDataset(index_json=index, patch=patch, anytime=anytime)
-        val_ds = SatTripletDataset(index_json=val_index or index, patch=patch, augment=False, anytime=anytime)
-        if anytime:
-            print(f"[train] arbitrary-time ON: {len(ds)} variable-(gap, t) samples")
+        # Multi-source training (added): --index may be a comma-separated list of per-source index files
+        # (e.g. goes19,himawari9,insat3dr). Each SatTripletDataset reads with its own source, and a
+        # ConcatDataset mixes them so one model trains on all satellites at once. Documented in explanation.md.
+        idx_paths = [s.strip() for s in str(index).split(",") if s.strip()]
+        if len(idx_paths) > 1:
+            subs = [SatTripletDataset(index_json=p, patch=patch, anytime=anytime) for p in idx_paths]
+            ds = torch.utils.data.ConcatDataset(subs)
+            val_ds = SatTripletDataset(index_json=val_index or idx_paths[0], patch=patch, augment=False, anytime=anytime)
+            print("[train] multi-source ON: "
+                  + ", ".join(f"{Path(p).stem}={len(s)}" for p, s in zip(idx_paths, subs))
+                  + f" (total {len(ds)} samples)")
+        else:
+            ds = SatTripletDataset(index_json=index, patch=patch, anytime=anytime)
+            val_ds = SatTripletDataset(index_json=val_index or index, patch=patch, augment=False, anytime=anytime)
+            if anytime:
+                print(f"[train] arbitrary-time ON: {len(ds)} variable-(gap, t) samples")
     if len(ds) == 0:
         raise RuntimeError(f"No samples in {index}. Download more frames "
                            f"(e.g. `python data_setup.py --download goes --max-gb 5`) then rebuild the index.")
@@ -105,6 +117,12 @@ def train(index: str, out: str, steps: int = 20000, lr: float = 1e-4, batch: int
         print(f"[train] PINN physics loss ON (weight {pinn_weight})")
     opt = torch.optim.AdamW(net.parameters(), lr=lr, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=steps)
+
+    # EMA (exponential moving average of weights) — a smoothed copy that generalises better; the saved
+    # checkpoint is the EMA, validated each interval. Standard VFI trick, ~0.1-0.2 dB on held-out.
+    ema = {k: v.detach().clone() for k, v in net.state_dict().items()} if ema_decay > 0 else None
+    if ema is not None:
+        print(f"[train] EMA ON (decay {ema_decay})")
 
     out_dir = Path(out); out_dir.mkdir(parents=True, exist_ok=True)
     best = -1.0
@@ -126,14 +144,31 @@ def train(index: str, out: str, steps: int = 20000, lr: float = 1e-4, batch: int
                 else:
                     pred = net(i0, i1, t)
                     loss = combined_loss(pred, gt)
+                if perc_weight:                      # small VGG perceptual term (sharpness / LPIPS)
+                    loss = loss + perc_weight * perceptual_loss(pred, gt)
             opt.zero_grad(); loss.backward(); opt.step(); sched.step()
+            if ema is not None:
+                with torch.no_grad():
+                    for k, v in net.state_dict().items():
+                        if torch.is_floating_point(ema[k]):
+                            ema[k].mul_(ema_decay).add_(v.detach(), alpha=1 - ema_decay)
+                        else:
+                            ema[k].copy_(v)
             step += 1
             if step % 50 == 0:
                 print(f"[train] step {step}/{steps}  loss {loss.item():.4f}{'  (+PINN)' if pinn else ''}")
             if step % val_every == 0 or step == steps:
-                m = validate(net, val_ds, device)
+                if ema is not None:                  # validate + save the EMA weights
+                    raw = {k: v.detach().clone() for k, v in net.state_dict().items()}
+                    net.load_state_dict(ema)
+                    m = validate(net, val_ds, device)
+                    save_state = {k: v.detach().clone() for k, v in net.state_dict().items()}
+                    net.load_state_dict(raw)
+                else:
+                    m = validate(net, val_ds, device)
+                    save_state = net.state_dict()
                 print(f"[val] step {step}  psnr {m['psnr']:.3f}  ssim {m['ssim']:.4f}")
-                ckpt = {"model": net.state_dict(), "step": step, "val": m, "base": base}
+                ckpt = {"model": save_state, "step": step, "val": m, "base": base}
                 torch.save(ckpt, out_dir / "last.pt")
                 if m["ssim"] > best:
                     best = m["ssim"]
@@ -182,10 +217,15 @@ def main():
                     help="arbitrary-time training on variable-(gap, t) samples (30→15→7.5 ready)")
     ap.add_argument("--multigap", action="store_true",
                     help="temporal multi-granularity: supervise each target from several gaps with a combined loss")
+    ap.add_argument("--perceptual-weight", type=float, default=0.0,
+                    help="weight of the VGG perceptual loss (sharpness / LPIPS); 0 disables it")
+    ap.add_argument("--ema-decay", type=float, default=0.0,
+                    help="EMA decay for a smoothed weight average (e.g. 0.999); 0 disables it")
     a = ap.parse_args()
     train(a.index, a.out, a.steps, a.lr, a.batch, a.patch, a.base, a.device, a.val_index,
           val_every=a.val_every, workers=a.workers, init_weights=a.init,
-          pinn=a.pinn, pinn_weight=a.pinn_weight, anytime=a.anytime, multigap=a.multigap)
+          pinn=a.pinn, pinn_weight=a.pinn_weight, anytime=a.anytime, multigap=a.multigap,
+          perc_weight=a.perceptual_weight, ema_decay=a.ema_decay)
 
 
 if __name__ == "__main__":

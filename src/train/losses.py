@@ -75,3 +75,35 @@ def combined_loss(pred, target, weights=(1.0, 0.1, 0.1)):
     if w_ce:
         total = total + w_ce * census_loss(pred, target)
     return total
+
+
+_VGG_FEAT = None
+
+
+def perceptual_loss(pred, target):
+    """VGG16 feature L1 — a perceptual (LPIPS-style) term. The strong pretrained baselines (FILM) were
+    trained with a perceptual objective, which is why they win LPIPS/perceptual sharpness; adding a small
+    VGG feature loss lets our IR-trained model contest that without hurting the pixel metrics. Inputs are
+    1-band [0,1] frames (replicated to 3ch, ImageNet-normalised). Frozen VGG; gated if torchvision absent."""
+    import torch
+    global _VGG_FEAT
+    if _VGG_FEAT is None:
+        try:
+            from torchvision.models import VGG16_Weights, vgg16
+            feats = vgg16(weights=VGG16_Weights.DEFAULT).features[:16].eval()  # through relu3_3
+            for p in feats.parameters():
+                p.requires_grad_(False)
+            _VGG_FEAT = feats
+        except Exception:
+            _VGG_FEAT = False
+    if _VGG_FEAT is False:
+        return pred.new_zeros(())
+    vgg = _VGG_FEAT.to(pred.device)
+    mean = pred.new_tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
+    std = pred.new_tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
+
+    def feat(x):
+        x = x.repeat(1, 3, 1, 1) if x.shape[1] == 1 else x
+        return vgg((x.clamp(0, 1) - mean) / std)
+
+    return (feat(pred) - feat(target)).abs().mean()

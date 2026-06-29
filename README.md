@@ -21,39 +21,44 @@ dashboard and a metrics report.
 motion) · Super-SloMo (baseline) · RAFT (flow/motion vectors) · classical TV-L1 (artefact comparison).
 All open-source. Heavy nets used **pretrained**; the small UNetVFI is **trained** (cheap on a T4).
 
-## Custom architecture — UNetVFI
-A compact flow-based interpolator we own end-to-end: a U-Net takes the **two IR frames (one band each)**
-and predicts **bidirectional intermediate flow + a visibility/occlusion mask** (RIFE-style intermediate
-flow ⊕ Super-SloMo-style visibility blending), then backward-warps both inputs to time `t` and fuses them.
-Time `t` is **implicit** — it only scales the predicted flow (`f_{t→0}=t·flow`), so one model renders any
-intermediate time. Single IR band per frame, two-frame input (no extra bands — per the PS). ~2–5 M params
-→ trains from scratch on GOES/Himawari in hours on one T4; self-supervises on INSAT.
+## Custom architecture — UNetVFI (**FeatSynthVFI**)
+A flow-based interpolator we own end-to-end, fusing the strong baselines' best ideas and training them on
+satellite IR. A **weight-tied Siamese encoder** builds a feature pyramid for each of the **two IR frames
+(one band each)**; a **coarse-to-fine decoder** predicts the **bidirectional intermediate flow** (RIFE/
+IFRNet-style) at 1/8 res and residually refines it (1/4→1/2→1/1) with feature warping, plus a **visibility
+mask** (Super-SloMo). The two inputs are warped to time `t` and blended; a **feature-synthesis decoder**
+(FILM/SoftSplat-style) then warps the pyramids to `t` and adds a smooth, bounded residual. A **PINN source
+head** models brightness growth/decay. Time `t` is **implicit** — it only scales the flow, so one model
+renders any intermediate time. ~4.25 M params → trains from scratch in ~30 min on one T4.
 
 ```
-  frame t0 ─┐                      ┌──────────── U-Net encoder → decoder ────────────┐
-            ├─► concat (2 ch) ────►│  inc 32 ─Down→ 64 ─Down→ 128 ─Down→ 256 (bottle)│
-  frame t2 ─┘   1 IR band each     │     └─skip─┐  └─skip─┐  └─skip─┐                 │
-                                   │      Up 32◄┘   Up 64◄┘  Up 128◄┘                 │
-                                   │        │                                        │
-                                   │     head → 5 channels                           │
-                                   └────────┼────────────────────────────────────────┘
-                                            ▼
-                 ┌──────────────────────────┼──────────────────────────┐
-                 ▼                          ▼                           ▼
-          flow_{t→0} (2ch)           flow_{t→1} (2ch)             mask (1ch, σ)
-            × t                        × (1−t)                         │
-                 │                          │                         │
-                 ▼                          ▼                         │
-       backward-warp(t0) ──┐    ┌── backward-warp(t2)                 │
-                           ▼    ▼                                     │
-            pred(t) = mask · warp(t0)  +  (1 − mask) · warp(t2) ◄─────┘
-                           │
-                           ▼   t ∈ (0,1)  →  30→15 (t=½), 30→7.5 (t=¼,¾), …
-                  synthetic intermediate frame  (denormalized → .nc)
+  frame t0 ─► Siamese encoder ─► pyramid {1/1,1/2,1/4,1/8}  ┐
+  frame t2 ─► Siamese encoder ─► pyramid {1/1,1/2,1/4,1/8}  ┘
+        │
+        ▼  coarse→fine flow decoder (warp features by current flow, refine residually per scale)
+   flow_{t→0}, flow_{t→1}  +  mask M  +  PINN source S
+        │
+        ▼  warp-blend:  M·warp(t0) + (1−M)·warp(t2)
+        ▼  + synthesis residual rendered from the *warped feature pyramids* (smooth, bounded)
+   pred(t)  →  t∈(0,1): 30→15 (t=½), 30→7.5 (t=¼,¾), …  →  denormalized → .nc
 ```
 
-Trained with a Charbonnier (robust L1) + edge/gradient + soft-census loss tuned for the smooth thermal-IR
-gradients of moving cloud. See `src/models/unet_vfi.py` and `docs/model-choices.md`.
+Trained **across GOES-19 + Himawari-9 + INSAT at once** (one `ConcatDataset`) with Charbonnier + edge/
+gradient + soft-census + a small VGG **perceptual** loss + the **PINN advection** loss, using **EMA**.
+See `src/models/unet_vfi.py`, `src/train/finetune.py`, and `explanation.md` §6/§11.
+
+### Held-out results (24 GOES triplets, **separate-day** test — no leakage)
+After 5 architecture iterations the custom model is a decisive **#2**: it **beats classical, RAFT and
+Super-SloMo on every metric**, and **matches pretrained-SOTA FILM** to ~0.4% (FILM is frozen/pretrained on
+millions of natural-video frames, so it cannot overfit). Full table + plots in `validation_report/goes19_heldout/`.
+
+| model | PSNR | SSIM | FSIM | edge-SSIM | LPIPS |
+|---|---|---|---|---|---|
+| FILM (pretrained SOTA) | **38.91** | **0.962** | **0.9947** | **0.928** | **0.097** |
+| **UNetVFI (ours)** | 38.76 | 0.957 | 0.9945 | 0.926 | 0.145 |
+| classical | 38.30 | 0.951 | 0.9936 | 0.920 | 0.150 |
+| RAFT | 37.00 | 0.944 | 0.9918 | 0.893 | 0.158 |
+| Super-SloMo | 35.46 | 0.946 | 0.9881 | 0.889 | 0.173 |
 
 ## Repo layout
 ```

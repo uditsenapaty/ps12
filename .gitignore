@@ -57,3 +57,6 @@ Thumbs.db
 # ppt preview/render scratch
 _preview/
 _tpl_media/
+
+# --- run logs (regenerated) ---
+/logs/

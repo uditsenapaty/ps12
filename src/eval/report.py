@@ -21,7 +21,9 @@ from . import metrics
 def _read_bt(path, source: str, crop_frac: float | None, with_lonlat: bool = False):
     """Read a frame, cropping the central region for GOES (keeps eval fast + within memory)."""
     kw: dict = {"with_lonlat": with_lonlat}
-    if crop_frac and source.lower().startswith("goes"):
+    # Central-crop the big full-disk sources (GOES ~5424², INSAT ~3200²) for tractable eval; both readers
+    # accept crop_frac. Himawari is already centrally cropped in its cached .nc, so it is left untouched.
+    if crop_frac and source.lower().startswith(("goes", "insat")):
         kw["crop_frac"] = crop_frac
     return read_frame(path, source, **kw)
 

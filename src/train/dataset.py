@@ -21,7 +21,9 @@ def _read_norm(path: str, source: str, bt_min: float, bt_max: float, crop_frac: 
     """Cached read -> normalized [0,1] (NaN-filled with 0). Cache avoids re-reading shared frames.
     `crop_frac` reads only the central fraction of the disk (big training speed-up for GOES full disk)."""
     kw: dict = {"with_lonlat": False}
-    if crop_frac and source.lower().startswith("goes"):
+    # Central-crop the large full-disk sources (GOES, INSAT) for fast training reads; both readers accept
+    # crop_frac. Himawari trains from its pre-cropped cached .nc, so it is read whole.
+    if crop_frac and source.lower().startswith(("goes", "insat")):
         kw["crop_frac"] = crop_frac
     fr = read_frame(path, source, **kw)
     n, _ = fill_invalid(bt_to_norm(fr.bt, bt_min, bt_max))

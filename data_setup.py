@@ -212,6 +212,16 @@ def build_index(data_dir: Path, source: str, step_min: float, out_json: Path,
     sys.path.insert(0, str(ROOT))
     from src.data.triplets import (index_frames, build_triplets, build_leave_one_out,
                                     build_anytime_samples, build_multigap_groups)
+    # Per-source gap policy: GOES/Himawari (10-min) train across multiple gap granularities (the
+    # configured gap_levels / multigap_levels). INSAT is ALWAYS a single fixed 60-min input gap — its
+    # native leave-one-out bracket (predict 00:30 from 00:00 & 01:00). At INSAT's 30-min cadence that is
+    # exactly multigap level 1 (±30 min) and anytime base span 2·30=60 min, single level, midpoint only;
+    # we never widen INSAT to multi-gap. The clamp holds regardless of the gap_levels passed in.
+    if source.lower().startswith("insat"):
+        if (gap_levels, multigap_levels, time_step) != (1, 1, 0.5):
+            print(f"[index] INSAT: forcing fixed 60-min gap (gap_levels {gap_levels}->1, "
+                  f"multigap_levels {multigap_levels}->1, time_step {time_step}->0.5)")
+        gap_levels, multigap_levels, time_step = 1, 1, 0.5
     files = [p for p in data_dir.rglob("*") if p.suffix.lower() in (".nc", ".h5", ".hdf", ".hdf5")]
     indexed = index_frames(files, source)
     trips = build_triplets(indexed, step_min)

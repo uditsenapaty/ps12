@@ -26,6 +26,16 @@ def _segments(path: str | Path) -> list[str]:
 
 def read_himawari(path: str | Path, source: str = "himawari9", band: str = "B13",
                   with_lonlat: bool = False) -> SatFrame:
+    # Fast path (added): a pre-decoded BT NetCDF produced by scripts/prep_himawari.py. Reading the raw
+    # HSD .DAT.bz2 segments through satpy is slow (bz2 decompress + calibrate per read), so for training
+    # we convert each timestep once to a central-cropped BT .nc and read that here. Routed via read_frame
+    # exactly like the segment path; documented in explanation.md.
+    if Path(path).suffix.lower() == ".nc":
+        from .ncio import read_nc
+        bt, t, attrs = read_nc(path)
+        return SatFrame(bt=bt.astype(np.float32), time=t, source=source,
+                        band=attrs.get("band", band), meta={"file": Path(path).name, "cached_nc": True})
+
     try:
         from satpy import Scene
     except Exception as e:  # pragma: no cover - server has satpy

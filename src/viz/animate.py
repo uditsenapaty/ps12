@@ -8,11 +8,16 @@ import numpy as np
 
 def bt_to_rgb(bt: np.ndarray, bt_min: float = 180.0, bt_max: float = 330.0, cmap: str = "Greys") -> np.ndarray:
     """Map a BT (K) field to an RGB uint8 image. 'Greys' shows cold cloud tops bright (IR convention)."""
-    import matplotlib.cm as cm
     from matplotlib.colors import Normalize
+    try:                                              # matplotlib>=3.9 removed cm.get_cmap
+        from matplotlib import colormaps
+        cmap_obj = colormaps[cmap]
+    except Exception:
+        import matplotlib.cm as cm
+        cmap_obj = cm.get_cmap(cmap)
     norm = Normalize(vmin=bt_min, vmax=bt_max)
     x = norm(np.nan_to_num(bt, nan=bt_max))           # space/off-disk -> warm end
-    rgba = cm.get_cmap(cmap)(1.0 - x)                 # invert: cold = bright
+    rgba = cmap_obj(1.0 - x)                           # invert: cold = bright
     rgb = (rgba[..., :3] * 255).astype(np.uint8)
     return rgb
 

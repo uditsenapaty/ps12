@@ -1,13 +1,23 @@
-"""UNetVFI — a compact, fully-trainable flow-based interpolator we own end-to-end.
+"""UNetVFI — our custom, fully-trainable flow-based interpolator (we own it end-to-end).
 
-Why this exists: RIFE/FILM/Super-SloMo are used as strong *pretrained* references, but the PS wants a
-model *trained on satellite data*. UNetVFI is a small encoder-decoder that predicts bidirectional
-flow + a blend mask, backward-warps the two inputs to time t, and fuses them. It trains from scratch
-on GOES/Himawari triplets in hours on a single T4 and self-supervises on INSAT — a genuinely runnable
-training path (no fragile dependence on an external repo's train loop).
+Iteration-1 architecture: **FeatSynthVFI**. The pretrained baselines that are hardest to beat (FILM,
+classical TV-L1) win because of multi-scale *feature-domain synthesis* + good flow; our edge is that we
+train ON satellite thermal-IR (FILM/Super-SloMo are pretrained on natural RGB video). So this network
+fuses the strong ideas and trains them on IR:
 
-Single-channel in/out (satellite IR is 1-band) — no 3-channel hack needed. torch is imported lazily so
-this module is importable without torch installed.
+  * Siamese (weight-tied) multi-scale ENCODER applied to each 1-band frame -> per-frame feature pyramids.
+  * A coarse->fine FLOW DECODER fuses both pyramids and predicts a bidirectional intermediate flow
+    (flow_a, flow_b) + a blend mask. Time t SCALES the flow (f_{t0}=t·flow_a, f_{t1}=(1−t)·flow_b) — the
+    linear-motion intermediate-flow formulation, kept so t stays implicit and per-sample t works.
+  * A SYNTHESIS DECODER warps the encoder features to time t and predicts a bounded residual on top of
+    the warp-blend (FILM/SoftSplat-style) — this fixes warp artifacts/blur that hurt SSIM/edge-SSIM/LPIPS.
+    The residual is zero-initialised (res_scale) so early training is the proven warp-blend and the
+    synthesis branch ramps in gradually (overfit guard on a small dataset).
+  * A PINN source head S models brightness growth/decay (advection physics) — what optical flow can't.
+
+Interface is unchanged: build_net()(base); forward(i0,i1,t,return_aux) -> pred (B,1,H,W) in [0,1], and
+with return_aux -> (pred, f_t0, f_t1, mask, source) so the advection PINN loss (u = f_t1 − f_t0) and the
+training/eval/inference code keep working. Single IR band in/out. torch imported lazily.
 """
 from __future__ import annotations
 
@@ -19,7 +29,7 @@ from .vendor import has_weights, torch_available, weights_path
 
 
 def build_net():
-    """Construct the UNetVFI torch nn.Module (imported lazily)."""
+    """Construct the FeatSynthVFI torch nn.Module (imported lazily)."""
     import torch
     import torch.nn as nn
     import torch.nn.functional as F
@@ -27,86 +37,132 @@ def build_net():
     def conv(ci, co, k=3, s=1):
         return nn.Sequential(nn.Conv2d(ci, co, k, s, k // 2), nn.PReLU(co))
 
-    class Down(nn.Module):
-        def __init__(self, ci, co):
+    def _warp(img, flow):
+        """Backward bilinear warp: out(x) = img(x + flow(x)). flow=(B,2,H,W) in pixels."""
+        B, C, H, W = img.shape
+        ys, xs = torch.meshgrid(torch.arange(H, device=img.device), torch.arange(W, device=img.device), indexing="ij")
+        grid = torch.stack((xs, ys), 0).float()[None].repeat(B, 1, 1, 1)
+        vg = grid + flow
+        vgx = 2.0 * vg[:, 0] / max(W - 1, 1) - 1.0
+        vgy = 2.0 * vg[:, 1] / max(H - 1, 1) - 1.0
+        vgrid = torch.stack((vgx, vgy), dim=-1)
+        return F.grid_sample(img, vgrid, mode="bilinear", padding_mode="border", align_corners=True)
+
+    def warp_to(feat, flow_full):
+        """Warp a (possibly downscaled) feature map by a full-res flow, rescaling flow res + magnitude."""
+        if feat.shape[-2:] != flow_full.shape[-2:]:
+            sx = feat.shape[-1] / flow_full.shape[-1]
+            sy = feat.shape[-2] / flow_full.shape[-2]
+            f = F.interpolate(flow_full, size=feat.shape[-2:], mode="bilinear", align_corners=False)
+            f = torch.stack((f[:, 0] * sx, f[:, 1] * sy), dim=1)
+        else:
+            f = flow_full
+        return _warp(feat, f)
+
+    def up(x, skip):
+        return F.interpolate(x, size=skip.shape[-2:], mode="bilinear", align_corners=False)
+
+    def up_flow(flow4, ref):
+        """Upscale a 4-channel flow (flow_a xy, flow_b xy) to ref's resolution, scaling magnitude by the
+        resolution ratio so the displacement stays consistent across scales."""
+        sx = ref.shape[-1] / flow4.shape[-1]
+        sy = ref.shape[-2] / flow4.shape[-2]
+        f = F.interpolate(flow4, size=ref.shape[-2:], mode="bilinear", align_corners=False)
+        return torch.stack((f[:, 0] * sx, f[:, 1] * sy, f[:, 2] * sx, f[:, 3] * sy), dim=1)
+
+    class Enc(nn.Module):
+        """Siamese per-frame multi-scale encoder (1 IR band in)."""
+        def __init__(self, base):
             super().__init__()
-            self.c = nn.Sequential(conv(ci, co, 3, 2), conv(co, co))
+            self.c0 = nn.Sequential(conv(1, base), conv(base, base))
+            self.c1 = nn.Sequential(conv(base, 2 * base, 3, 2), conv(2 * base, 2 * base))
+            self.c2 = nn.Sequential(conv(2 * base, 4 * base, 3, 2), conv(4 * base, 4 * base))
+            self.c3 = nn.Sequential(conv(4 * base, 8 * base, 3, 2), conv(8 * base, 8 * base))
 
         def forward(self, x):
-            return self.c(x)
+            e0 = self.c0(x)
+            e1 = self.c1(e0)
+            e2 = self.c2(e1)
+            e3 = self.c3(e2)
+            return e0, e1, e2, e3
 
-    class Up(nn.Module):
-        def __init__(self, ci, co):
-            super().__init__()
-            self.c = nn.Sequential(conv(ci, co), conv(co, co))
-
-        def forward(self, x, skip):
-            x = F.interpolate(x, scale_factor=2, mode="bilinear", align_corners=False)
-            if x.shape[-2:] != skip.shape[-2:]:
-                x = F.interpolate(x, size=skip.shape[-2:], mode="bilinear", align_corners=False)
-            return self.c(torch.cat([x, skip], 1))
-
-    class UNetVFINet(nn.Module):
-        """Predicts (flow_t0[2], flow_t1[2], mask[1]) from concat(I0, I1) and warps to time t.
-
-        One IR band per frame, so the input is just the two frames (2 ch). Time `t` is *implicit*: the
-        network never sees t as a feature — it predicts a single base flow field, and t only SCALES it
-        (f_{t→0}=t·flow, f_{t→1}=(1−t)·flow) — the standard linear-motion intermediate-flow formulation.
-        """
+    class FeatSynthVFINet(nn.Module):
+        """iter-3: COARSE-TO-FINE intermediate flow (RIFE/IFRNet style). The flow is estimated at 1/8 and
+        residually refined at 1/4, 1/2, 1/1; at each finer scale the encoder features are WARPED by the
+        current (time-scaled) flow before predicting the residual, so the network aligns features as it
+        sharpens the motion. Then the synthesis decoder warps the pyramids to time t and adds a smooth
+        (1/2-res) residual. t stays implicit (it scales the flow), and return_aux still yields
+        (pred, f_t0, f_t1, mask, source)."""
         def __init__(self, base: int = 32):
             super().__init__()
-            self.inc = nn.Sequential(conv(2, base), conv(base, base))   # concat(I0, I1) — one IR band each
-            self.d1 = Down(base, base * 2)
-            self.d2 = Down(base * 2, base * 4)
-            self.d3 = Down(base * 4, base * 8)
-            self.u3 = Up(base * 8 + base * 4, base * 4)
-            self.u2 = Up(base * 4 + base * 2, base * 2)
-            self.u1 = Up(base * 2 + base, base)
-            self.head = nn.Conv2d(base, 5, 3, 1, 1)            # flow_t0(2), flow_t1(2), mask(1)
-            self.src_head = nn.Conv2d(base, 1, 3, 1, 1)        # PINN source term S(x) (cloud growth/decay)
-
-        @staticmethod
-        def _warp(img, flow):
-            B, C, H, W = img.shape
-            ys, xs = torch.meshgrid(torch.arange(H, device=img.device), torch.arange(W, device=img.device), indexing="ij")
-            grid = torch.stack((xs, ys), 0).float()[None].repeat(B, 1, 1, 1)
-            vgrid = grid + flow
-            vgrid[:, 0] = 2.0 * vgrid[:, 0] / max(W - 1, 1) - 1.0
-            vgrid[:, 1] = 2.0 * vgrid[:, 1] / max(H - 1, 1) - 1.0
-            return F.grid_sample(img, vgrid.permute(0, 2, 3, 1), mode="bilinear", padding_mode="border", align_corners=True)
+            self.base = base
+            self.enc = Enc(base)
+            # coarse->fine flow decoder: fuse pyramids, predict + residually refine a 4-ch flow per scale
+            self.fb = conv(16 * base, 8 * base)
+            self.flow3 = nn.Conv2d(8 * base, 4, 3, 1, 1)                 # initial flow @ 1/8
+            self.f2 = nn.Sequential(conv(8 * base + 4 * base + 4 * base, 4 * base), conv(4 * base, 4 * base))
+            self.flow2 = nn.Conv2d(4 * base, 4, 3, 1, 1)
+            self.f1 = nn.Sequential(conv(4 * base + 2 * base + 2 * base, 2 * base), conv(2 * base, 2 * base))
+            self.flow1 = nn.Conv2d(2 * base, 4, 3, 1, 1)
+            self.f0 = nn.Sequential(conv(2 * base + base + base, base), conv(base, base))
+            self.flow0 = nn.Conv2d(base, 4, 3, 1, 1)
+            self.mask_head = nn.Conv2d(base, 1, 3, 1, 1)
+            self.src_head = nn.Conv2d(base, 1, 3, 1, 1)                  # PINN source S
+            # synthesis decoder over warped features -> smooth (1/2-res) bounded residual on the blend
+            self.sb = conv(16 * base, 4 * base)
+            self.s2 = nn.Sequential(conv(4 * base + 8 * base, 2 * base), conv(2 * base, 2 * base))
+            self.s1 = nn.Sequential(conv(2 * base + 4 * base, base), conv(base, base))
+            self.res_head = nn.Conv2d(base, 1, 3, 1, 1)
+            self.res_scale = nn.Parameter(torch.zeros(1))
 
         @staticmethod
         def _t_tensor(t, ref):
-            """t -> (B,1,1,1) tensor on ref's device/dtype, used to SCALE the flow. Accepts a python float
-            (same t for the batch) or a per-sample tensor of shape (B,) — so arbitrary-time/multigap batches
-            can mix different t. t is NOT concatenated as an input feature (it stays implicit)."""
             B = ref.shape[0]
             if torch.is_tensor(t):
                 return t.to(device=ref.device, dtype=ref.dtype).reshape(B, 1, 1, 1)
             return torch.full((B, 1, 1, 1), float(t), device=ref.device, dtype=ref.dtype)
 
         def forward(self, i0, i1, t: float = 0.5, return_aux: bool = False):
-            tt = self._t_tensor(t, i0)                                    # (B,1,1,1) — scales the flow only
-            x0 = self.inc(torch.cat([i0, i1], 1))
-            x1 = self.d1(x0)
-            x2 = self.d2(x1)
-            x3 = self.d3(x2)
-            y = self.u3(x3, x2)
-            y = self.u2(y, x1)
-            y = self.u1(y, x0)
-            out = self.head(y)
-            f_t0 = out[:, 0:2] * tt
-            f_t1 = out[:, 2:4] * (1 - tt)
-            mask = torch.sigmoid(out[:, 4:5])
-            w0 = self._warp(i0, f_t0)
-            w1 = self._warp(i1, f_t1)
-            pred = (mask * w0 + (1 - mask) * w1).clamp(0, 1)
-            if return_aux:                 # for the PINN physics loss
-                source = self.src_head(y)
+            a0, a1, a2, a3 = self.enc(i0)
+            b0, b1, b2, b3 = self.enc(i1)
+            tt = self._t_tensor(t, i0)
+            # coarse-to-fine flow: predict @ 1/8, refine residually @ 1/4, 1/2, 1/1 with feature warping
+            d = self.fb(torch.cat([a3, b3], 1))
+            fl = self.flow3(d)
+            fl = up_flow(fl, a2)
+            wa, wb = _warp(a2, fl[:, 0:2] * tt), _warp(b2, fl[:, 2:4] * (1 - tt))
+            d = self.f2(torch.cat([up(d, a2), wa, wb], 1))
+            fl = fl + self.flow2(d)
+            fl = up_flow(fl, a1)
+            wa, wb = _warp(a1, fl[:, 0:2] * tt), _warp(b1, fl[:, 2:4] * (1 - tt))
+            d = self.f1(torch.cat([up(d, a1), wa, wb], 1))
+            fl = fl + self.flow1(d)
+            fl = up_flow(fl, a0)
+            wa, wb = _warp(a0, fl[:, 0:2] * tt), _warp(b0, fl[:, 2:4] * (1 - tt))
+            g = self.f0(torch.cat([up(d, a0), wa, wb], 1))
+            fl = fl + self.flow0(g)                                   # final full-res flow
+            f_t0 = fl[:, 0:2] * tt
+            f_t1 = fl[:, 2:4] * (1 - tt)
+            mask = torch.sigmoid(self.mask_head(g))
+            w0 = _warp(i0, f_t0)
+            w1 = _warp(i1, f_t1)
+            blend = mask * w0 + (1 - mask) * w1
+            # synthesis: warp the feature pyramids to time t, predict a smooth bounded residual
+            wa3, wb3 = warp_to(a3, f_t0), warp_to(b3, f_t1)
+            wa2, wb2 = warp_to(a2, f_t0), warp_to(b2, f_t1)
+            wa1, wb1 = warp_to(a1, f_t0), warp_to(b1, f_t1)
+            s = self.sb(torch.cat([wa3, wb3], 1))
+            s = self.s2(torch.cat([up(s, wa2), wa2, wb2], 1))
+            s = self.s1(torch.cat([up(s, wa1), wa1, wb1], 1))         # base ch @ 1/2 res
+            residual_lr = torch.tanh(self.res_head(s)) * self.res_scale
+            residual = F.interpolate(residual_lr, size=blend.shape[-2:], mode="bilinear", align_corners=False)
+            pred = (blend + residual).clamp(0, 1)
+            if return_aux:
+                source = self.src_head(g)
                 return pred, f_t0, f_t1, mask, source
             return pred
 
-    return UNetVFINet
+    return FeatSynthVFINet
 
 
 class UNetVFIInterpolator(Interpolator):

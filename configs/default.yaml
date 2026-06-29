@@ -45,6 +45,13 @@ multigap:                           # temporal multi-granularity — ONE target 
   levels: 1                         # max symmetric bracket level per target: L=1..levels uses (g-L, g+L).
                                     # levels=1 -> plain midpoint triplet; levels=2 -> (10,30)+(0,40); cost ≈ L× per step
 
+# PER-SOURCE GAP POLICY (enforced in data_setup.build_index):
+#   GOES-19 / Himawari-9 (10-min cadence) -> use the multi-gap config above (anytime.gap_levels,
+#     multigap.levels) to train across several gap granularities.
+#   INSAT-3DR/3DS (30-min cadence) -> ALWAYS a single fixed 60-min input gap (its native leave-one-out
+#     bracket: predict 00:30 from 00:00 & 01:00 = multigap level 1, anytime gap_levels 1, time_step 0.5).
+#     build_index() clamps INSAT to this regardless of the gap_levels passed; INSAT is never widened.
+
 selfsup_insat:
   enabled: true
   step_min: 30                      # triplets (00:00, 00:30, 01:00) -> predict 00:30
