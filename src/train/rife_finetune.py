@@ -79,7 +79,7 @@ def finetune(index: str, weights: str, out: str, steps: int = 15000, lr: float =
     while step < steps:
         for b in loader:
             i0, gt, i1 = to3(b["I0"]), to3(b["GT"]), to3(b["I1"])
-            pred = model.inference(i0, i1, timestep=0.5)
+            pred = model.inference(i0, i1)              # midpoint (this package's inference takes no timestep)
             if not getattr(pred, "requires_grad", False):
                 raise RuntimeError("RIFE inference() returned a detached tensor — cannot fine-tune via "
                                    "this path (package exposes no trainable forward).")
