@@ -64,30 +64,37 @@ def finetune(index: str, weights: str, out: str, steps: int = 15000, lr: float =
     def to3(x):  # (B,1,H,W) -> (B,3,H,W) on device
         return x.repeat(1, 3, 1, 1).to(device)
 
+    # Fine-tune by backpropagating an L1/Charbonnier loss through RIFE's OWN inference() forward. We do
+    # NOT use the repo's Model.update training step: this packaged IFNet's forward() doesn't accept the
+    # 'scale' kwarg update() passes, so update() is broken here — but inference() works (verified). We
+    # train the flownet directly and save weights in the layout the wrapper's load_model(path, -1) reads.
+    net = model.flownet
+    net.train()
+    for p in net.parameters():
+        p.requires_grad_(True)
+    opt = torch.optim.AdamW(net.parameters(), lr=lr, weight_decay=1e-4)
+    torch.set_grad_enabled(True)
     step = 0
-    print(f"[rife-ft] {len(ds)} triplets | device={device} | steps={steps}")
+    print(f"[rife-ft] {len(ds)} triplets | device={device} | steps={steps} (inference-backprop)")
     while step < steps:
         for b in loader:
             i0, gt, i1 = to3(b["I0"]), to3(b["GT"]), to3(b["I1"])
-            imgs = torch.cat((i0, i1), 1)
-            cur_lr = lr * (1 - step / steps)
-            try:
-                pred, info = model.update(imgs, gt, cur_lr, training=True)
-            except TypeError:
-                pred, info = model.update(torch.cat((imgs, gt), 1), cur_lr, training=True)
+            pred = model.inference(i0, i1, timestep=0.5)
+            if not getattr(pred, "requires_grad", False):
+                raise RuntimeError("RIFE inference() returned a detached tensor — cannot fine-tune via "
+                                   "this path (package exposes no trainable forward).")
+            loss = torch.sqrt((pred - gt) ** 2 + 1e-6).mean()        # Charbonnier (robust L1)
+            opt.zero_grad(); loss.backward(); opt.step()
             step += 1
             if step % 50 == 0:
-                loss = info.get("loss_l1", info.get("loss_G", 0.0)) if isinstance(info, dict) else 0.0
                 print(f"[rife-ft] step {step}/{steps}  loss {float(loss):.4f}")
-            if step % 1000 == 0 or step == steps:
-                try:
-                    model.save_model(str(out_dir), -1)
-                except TypeError:
-                    model.save_model(str(out_dir))
-                print(f"[rife-ft] checkpoint -> {out_dir}")
             if step >= steps:
                 break
-    print(f"[rife-ft] done -> {out_dir}")
+    # Save with module.-prefixed keys: the wrapper reloads via load_model(path, -1), which keeps ONLY
+    # keys containing 'module.' (stripping it) — clean keys would reload to an empty state_dict.
+    sd = {(k if k.startswith("module.") else "module." + k): v.detach().cpu() for k, v in net.state_dict().items()}
+    torch.save(sd, out_dir / "flownet.pkl")
+    print(f"[rife-ft] done -> {out_dir}/flownet.pkl")
     return out_dir
 
 

@@ -234,22 +234,25 @@ def main():
     rife_pre = WD / "rife"
     RIFE_FT = {"setup1": WD / "rife_goes", "setup2": WD / "rife_hima", "setup3": WD / "rife_mix_insat"}
     if rife_ok:
-        if need(RIFE_FT["setup1"], "flownet.pkl"):
-            print("\n===== RIFE-ft 1: finetune RIFE on GOES =====", flush=True)
-            rife_finetune(str(i_goes_tri), weights=str(rife_pre), out=str(RIFE_FT["setup1"]),
-                          steps=a.steps, batch=a.batch, device=a.device)
-        if need(RIFE_FT["setup2"], "flownet.pkl"):
-            print("\n===== RIFE-ft 2: finetune RIFE on Himawari =====", flush=True)
-            rife_finetune(str(i_hima_tri), weights=str(rife_pre), out=str(RIFE_FT["setup2"]),
-                          steps=a.steps, batch=a.batch, device=a.device)
-        if need(WD / "rife_mix", "flownet.pkl"):
-            print("\n===== RIFE-ft 3a: finetune RIFE on GOES+Himawari =====", flush=True)
-            rife_finetune(f"{i_goes_tri},{i_hima_tri}", weights=str(rife_pre), out=str(WD / "rife_mix"),
-                          steps=a.steps, batch=a.batch, device=a.device)
-        if need(RIFE_FT["setup3"], "flownet.pkl"):
-            print("\n===== RIFE-ft 3b: self-supervise RIFE on INSAT, warm-start from rife_mix =====", flush=True)
-            rife_finetune(str(i_insat_tri), weights=str(WD / "rife_mix"), out=str(RIFE_FT["setup3"]),
-                          steps=a.steps, batch=max(2, a.batch // 2), device=a.device)
+        def _ft(idx, w, out, bs, tag):
+            """Fine-tune RIFE; NON-FATAL (a failure leaves that setup's rife_ft simply absent)."""
+            if not need(Path(out), "flownet.pkl"):
+                return True
+            print(f"\n===== RIFE-ft {tag} =====", flush=True)
+            try:
+                rife_finetune(idx, weights=str(w), out=str(out), steps=a.steps, batch=bs, device=a.device)
+                return (Path(out) / "flownet.pkl").exists()
+            except Exception as e:
+                print(f"[rife-ft] FAILED {tag}: {type(e).__name__}: {str(e)[:160]}", flush=True)
+                return False
+
+        _ft(str(i_goes_tri), rife_pre, RIFE_FT["setup1"], a.batch, "1: GOES")
+        _ft(str(i_hima_tri), rife_pre, RIFE_FT["setup2"], a.batch, "2: Himawari")
+        mix_ok = _ft(f"{i_goes_tri},{i_hima_tri}", rife_pre, WD / "rife_mix", a.batch, "3a: GOES+Himawari")
+        if mix_ok:
+            _ft(str(i_insat_tri), WD / "rife_mix", RIFE_FT["setup3"], max(2, a.batch // 2), "3b: INSAT self-sup")
+        else:
+            print("[rife-ft] skip 3b (INSAT self-sup) — 3a (rife_mix) unavailable", flush=True)
     else:
         print("[rife-ft] pretrained RIFE not runnable -> skipping finetuned-RIFE baseline", flush=True)
 
