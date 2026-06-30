@@ -246,11 +246,12 @@ def main():
                 print(f"[rife-ft] FAILED {tag}: {type(e).__name__}: {str(e)[:160]}", flush=True)
                 return False
 
-        _ft(str(i_goes_tri), rife_pre, RIFE_FT["setup1"], a.batch, "1: GOES")
-        _ft(str(i_hima_tri), rife_pre, RIFE_FT["setup2"], a.batch, "2: Himawari")
-        mix_ok = _ft(f"{i_goes_tri},{i_hima_tri}", rife_pre, WD / "rife_mix", a.batch, "3a: GOES+Himawari")
+        rb = max(2, a.batch // 2)   # RIFE backprop is memory-heavy -> smaller batch than the tiny UNet
+        _ft(str(i_goes_tri), rife_pre, RIFE_FT["setup1"], rb, "1: GOES")
+        _ft(str(i_hima_tri), rife_pre, RIFE_FT["setup2"], rb, "2: Himawari")
+        mix_ok = _ft(f"{i_goes_tri},{i_hima_tri}", rife_pre, WD / "rife_mix", rb, "3a: GOES+Himawari")
         if mix_ok:
-            _ft(str(i_insat_tri), WD / "rife_mix", RIFE_FT["setup3"], max(2, a.batch // 2), "3b: INSAT self-sup")
+            _ft(str(i_insat_tri), WD / "rife_mix", RIFE_FT["setup3"], max(2, rb // 2), "3b: INSAT self-sup")
         else:
             print("[rife-ft] skip 3b (INSAT self-sup) — 3a (rife_mix) unavailable", flush=True)
     else:
