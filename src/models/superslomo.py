@@ -12,7 +12,7 @@ import numpy as np
 
 from .base import Interpolator
 from .torch_utils import device_auto, gray_to_tensor, pad_to_multiple, tensor_to_gray, unpad
-from .vendor import add_to_path, has_vendor, has_weights, torch_available, weights_path
+from .vendor import add_to_path, has_vendor, has_weights, torch_available, vendor_path, weights_path
 
 
 class SuperSloMoInterpolator(Interpolator):
@@ -38,15 +38,18 @@ class SuperSloMoInterpolator(Interpolator):
     def _load(self):
         if self._fc is not None:
             return
+        import importlib.util
+
         import torch
-        add_to_path("superslomo")
-        try:
-            import model as ssm  # vendored Super-SloMo model.py (UNet, backWarp)
-        except Exception as e:
-            raise RuntimeError(
-                "Super-SloMo 'model.py' not found under src/models/vendor/superslomo "
-                "(clone avinashpaliwal/Super-SloMo). " + str(e)
-            )
+        # Load Super-SloMo's OWN model.py by file path — a bare `import model` collides with other
+        # vendored repos that also ship a top-level `model` module (e.g. RIFE's model/ package, which
+        # lands on sys.path once RIFE is used), grabbing the wrong module (no UNet) and crashing.
+        mp = vendor_path("superslomo") / "model.py"
+        if not mp.exists():
+            raise RuntimeError(f"Super-SloMo 'model.py' not found at {mp} (clone avinashpaliwal/Super-SloMo).")
+        spec = importlib.util.spec_from_file_location("superslomo_model", str(mp))
+        ssm = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ssm)
         self._ssm = ssm
         self._device = device_auto(self._device)
         dev = torch.device(self._device)
